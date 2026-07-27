@@ -1,0 +1,6 @@
+{
+  "name": "J&T Daily Delivery Report",
+  "description": "Daily delivery reporting system for J&T Express branch tracking, package delivery stats, COD, and parcel search.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
