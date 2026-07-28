@@ -853,27 +853,34 @@ export default function DailyReportApp() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Export report to CSV
-  const exportCSV = () => {
-    let csv = "Day,Row,Return,Relocate,Sent,PrevDay,Today,Tracking,ReceiverPhone,SenderPhone,CC,COD,Issue,Other\n";
+  // Export report to a real .xlsx Excel file (not CSV) — avoids Khmer text encoding issues
+  // that can happen when Excel opens a plain CSV, and gives a properly formatted native file.
+  const exportXLSX = async () => {
+    const XLSX = await import("xlsx");
+    const headers = [
+      "ថ្ងៃទី", "#", "ត្រឡប់", "បូរទីកាំង", "ផ្ញើចេញ", "ថ្ងៃមុន", "ថ្ងៃនេះ",
+      "លេខបៀល", "លេខអ្នកទទួល", "លេខអ្នកផ្ញើ", "CC-Cash", "COD KHR", "បញ្ហា", "កំណត់ចំណាំ"
+    ];
+    const rowsAoa: (string | number)[][] = [headers];
     for (let d = 1; d <= DAY_COUNT; d++) {
       const dayObj = data[d];
       if (!dayObj) continue;
       dayObj.rows.forEach((r, idx) => {
         if (r.tracking || r.receiverPhone || r.today || r.prevday || r.cod || r.cc) {
-          csv += `"${d}","${idx + 1}","${r.ret}","${r.reloc}","${r.sent}","${r.prevday}","${r.today}","${r.tracking}","${r.receiverPhone}","${r.senderPhone}","${r.cc}","${r.cod}","${r.issue}","${r.other}"\n`;
+          rowsAoa.push([
+            d, idx + 1, r.ret, r.reloc, r.sent, r.prevday, r.today,
+            r.tracking, r.receiverPhone, r.senderPhone, r.cc, r.cod, r.issue, r.other
+          ]);
         }
       });
     }
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `JT_Daily_Report_Month_Export.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const worksheet = XLSX.utils.aoa_to_sheet(rowsAoa);
+    worksheet["!cols"] = headers.map(() => ({ wch: 16 }));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "J&T Report");
+    XLSX.writeFile(workbook, "JT_Daily_Report_Month_Export.xlsx");
   };
+
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans">
@@ -986,10 +993,10 @@ export default function DailyReportApp() {
               <span className="hidden sm:inline">{copied ? "បានចម្លង!" : "ចម្លងរបាយការណ៍"}</span>
             </button>
 
-            {/* CSV Export */}
+            {/* Excel Export */}
             <button
-              onClick={exportCSV}
-              title="ទាញយក CSV"
+              onClick={exportXLSX}
+              title="ទាញយក Excel"
               className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-xl transition"
             >
               <Download className="w-4 h-4" />
