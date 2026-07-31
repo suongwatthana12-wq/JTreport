@@ -1,10 +1,12 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, KeyboardEvent } from "react";
 import {
   Search,
   X,
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   PackageSearch,
   ClipboardList,
   Plus,
@@ -23,7 +25,8 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
-  ShieldCheck
+  ShieldCheck,
+  FileUp
 } from "lucide-react";
 
 const DAY_COUNT = 31;
@@ -269,6 +272,94 @@ function parseVal(val: string | number | boolean | undefined): number {
   return isNaN(num) ? 0 : num;
 }
 
+// Auto zero-pad a tracking number typed against a known prefix template:
+//  - "J" + batch code (0135–0141) + up to 7 sequence digits → sequence digits are
+//    right-aligned and padded with leading zeros to 7 digits (e.g. "J013723349" → "J01370023349").
+//  - "TBKHJ" + up to 9 sequence digits → padded to 9 digits the same way.
+// If the user typed ONLY digits (no letter prefix) and a "sticky" lastPrefix is supplied (the
+// prefix last used in another row), it's prepended first — so after picking a prefix once, later
+// rows only need the trailing digits.
+// Values that don't match any known template are returned unchanged.
+function formatTrackingNumber(raw: string, lastPrefix?: string): string {
+  let val = raw.trim().toUpperCase();
+  if (!val) return "";
+
+  if (lastPrefix && /^\d{1,9}$/.test(val)) {
+    val = lastPrefix + val;
+  }
+
+  const jMatch = val.match(/^J(\d{4})(\d{0,10})$/);
+  if (jMatch) {
+    const prefixCode = jMatch[1];
+    const seq = jMatch[2];
+
+    if (!seq) {
+      return `J${prefixCode}`;
+    }
+
+    if (seq.length >= 7) {
+      return `J${prefixCode}${seq}`;
+    }
+
+    return `J${prefixCode}${seq.padStart(7, "0")}`;
+  }
+
+  const tbkhjMatch = val.match(/^TBKHJ(\d{0,12})$/);
+  if (tbkhjMatch) {
+    const seq = tbkhjMatch[1];
+    if (!seq) return "TBKHJ";
+    if (seq.length >= 9) return `TBKHJ${seq}`;
+    return `TBKHJ${seq.padStart(9, "0")}`;
+  }
+
+  return raw;
+}
+
+// Extract just the prefix portion (e.g. "J0137" or "TBKHJ") from an already-formatted tracking
+// number, used to remember the "sticky" prefix for the next row.
+function extractTrackingPrefix(formatted: string): string {
+  const match = formatted.trim().toUpperCase().match(/^(J\d{4}|TBKHJ)/);
+  return match ? match[1] : "";
+}
+
+// Adjust tracking prefix by incrementing or decrementing the head batch number (e.g. J0138 -> J0139 or J0137)
+function adjustTrackingPrefix(currentVal: string, direction: "up" | "down", lastPrefix?: string): string {
+  const val = currentVal.trim().toUpperCase();
+
+  if (!val) {
+    const base = (lastPrefix && /^J\d{3,4}$/.test(lastPrefix)) ? lastPrefix : "J0138";
+    const letter = base.match(/^[A-Z]+/)?.[0] || "J";
+    const numStr = base.match(/\d+/)?.[0] || "0138";
+    const num = parseInt(numStr, 10);
+    const newNum = direction === "up" ? num + 1 : Math.max(0, num - 1);
+    const newNumStr = String(newNum).padStart(numStr.length, "0");
+    return `${letter}${newNumStr}`;
+  }
+
+  const match = val.match(/^([A-Z]+)(\d{3,4})(.*)$/);
+  if (match) {
+    const letter = match[1];
+    const numStr = match[2];
+    const rest = match[3];
+    const num = parseInt(numStr, 10);
+    const newNum = direction === "up" ? num + 1 : Math.max(0, num - 1);
+    const newNumStr = String(newNum).padStart(numStr.length, "0");
+    return `${letter}${newNumStr}${rest}`;
+  }
+
+  if (/^\d+$/.test(val)) {
+    const base = (lastPrefix && /^J\d{3,4}$/.test(lastPrefix)) ? lastPrefix : "J0138";
+    const letter = base.match(/^[A-Z]+/)?.[0] || "J";
+    const numStr = base.match(/\d+/)?.[0] || "0138";
+    const num = parseInt(numStr, 10);
+    const newNum = direction === "up" ? num + 1 : Math.max(0, num - 1);
+    const newNumStr = String(newNum).padStart(numStr.length, "0");
+    return `${letter}${newNumStr}${val}`;
+  }
+
+  return currentVal;
+}
+
 function mergeWithDefaults(savedData: MonthData | null): MonthData {
   const full = emptyState();
   if (!savedData) return full;
@@ -330,6 +421,7 @@ export default function DailyReportApp() {
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const inputRefs = useRef<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
 
   const showToast = useCallback((text: string, type: "success" | "error" | "info" = "info") => {
     setToastMessage({ text, type });
@@ -525,6 +617,40 @@ export default function DailyReportApp() {
   // Current day data helper
   const currentDayData = useMemo(() => data[activeDay] || emptyDay(), [data, activeDay]);
 
+  // Count how many times each receiver phone number appears within the ACTIVE day only —
+  // used to show a "×N" badge so duplicate numbers on the same day stand out immediately.
+  // Rows already confirmed via the "ថ្ងៃនេះ" (today) or "ថ្ងៃមុន" (previous day) checkbox are
+  // treated as legitimate separate packages (not accidental duplicate entries) and excluded
+  // from the count — ticking either box on a row clears the ×N badge for that phone number.
+  const currentDayPhoneCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    currentDayData.rows.forEach((r) => {
+      const phone = r.receiverPhone.trim();
+      if (!phone) return;
+      const isConfirmed = parseVal(r.today) === 1 || parseVal(r.prevday) === 1;
+      if (isConfirmed) return;
+      counts[phone] = (counts[phone] || 0) + 1;
+    });
+    return counts;
+  }, [currentDayData]);
+
+  // Phone numbers ever entered across ALL days — powers the native browser autocomplete
+  // dropdown so previously-typed values can be selected again. (Tracking numbers deliberately
+  // do NOT reuse past full values here — only the prefix quick-picks below — per request.)
+  const allPhoneNumbers = useMemo(() => {
+    const set = new Set<string>();
+    Object.values(data).forEach((day: DayData) => day.rows.forEach((r) => { if (r.receiverPhone.trim()) set.add(r.receiverPhone.trim()); }));
+    return Array.from(set);
+  }, [data]);
+
+  // Quick-pick tracking number prefixes (J&T batch codes J0135–J0141, plus the TBKHJ template)
+  // so the user can select a head/prefix fast, then just type the trailing sequence digits.
+  const TRACKING_PREFIX_SUGGESTIONS = ["J0135", "J0136", "J0137", "J0138", "J0139", "J0140", "J0141", "TBKHJ"];
+
+  // "Sticky" prefix: once a row's tracking number is formatted against a known prefix, that
+  // prefix is remembered here so the NEXT row only needs the trailing digits typed in.
+  const [lastTrackingPrefix, setLastTrackingPrefix] = useState<string>("");
+
   // Calculate stats for active day
   const activeDayStats = useMemo(() => {
     const arrived = parseVal(currentDayData.arrived);
@@ -550,7 +676,7 @@ export default function DailyReportApp() {
     });
 
     const totalOut = todayCount + prevdayCount + retCount + relocCount + sentCount;
-    const remaining = arrived + prevLeftover - totalOut;
+    const remaining = arrived + prevLeftover - (todayCount + prevdayCount + retCount + relocCount);
     const dividend = (todayCount * 900) + (prevdayCount * 800) + (sentCount * 1000);
 
     return {
@@ -641,7 +767,7 @@ export default function DailyReportApp() {
       totalCC += dCC;
 
       const dTotalOut = dToday + dPrevDay + dRet + dReloc + dSent;
-      const dRem = arr + prevL - dTotalOut;
+      const dRem = arr + prevL - (dToday + dPrevDay + dRet + dReloc);
       const dDiv = (dToday * 900) + (dPrevDay * 800) + (dSent * 1000);
 
       dailyList.push({
@@ -733,14 +859,6 @@ export default function DailyReportApp() {
     });
   }, []);
 
-  // Handle header values edit (arrived / prevMonthLeftover)
-  const handleHeaderChange = useCallback((day: number, fieldKey: "arrived" | "prevMonthLeftover", value: string) => {
-    setData((prev) => {
-      const dayData = prev[day] || emptyDay();
-      return { ...prev, [day]: { ...dayData, [fieldKey]: value } };
-    });
-  }, []);
-
   // Add a row to current day
   const addRow = useCallback(() => {
     setData((prev) => {
@@ -748,6 +866,66 @@ export default function DailyReportApp() {
       return { ...prev, [activeDay]: { ...dayData, rows: [...dayData.rows, emptyRow()] } };
     });
   }, [activeDay]);
+
+  // Enter key navigation across table cells
+  const handleEnterNavigation = useCallback(
+    (e: KeyboardEvent, rowIndex: number, colKey: string) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+
+      let nextRow = rowIndex;
+      let nextCol = colKey;
+
+      if (colKey === "tracking") {
+        const raw = (currentDayData.rows[rowIndex]?.tracking || "").trim();
+        if (raw) {
+          const formatted = formatTrackingNumber(raw, lastTrackingPrefix);
+          if (formatted !== raw) {
+            handleCellChange(activeDay, rowIndex, "tracking", formatted);
+          }
+          const prefix = extractTrackingPrefix(formatted);
+          if (prefix) setLastTrackingPrefix(prefix);
+        }
+        nextCol = "receiverPhone";
+      } else if (colKey === "receiverPhone") {
+        nextRow = rowIndex + 1;
+        nextCol = "tracking";
+      } else {
+        const colIndex = COLUMNS.findIndex((c) => c.key === colKey);
+        if (colIndex >= 0 && colIndex < COLUMNS.length - 1) {
+          nextCol = COLUMNS[colIndex + 1].key;
+        } else {
+          nextRow = rowIndex + 1;
+          nextCol = "tracking";
+        }
+      }
+
+      const totalRows = currentDayData.rows?.length || DEFAULT_ROWS;
+      if (nextRow >= totalRows) {
+        addRow();
+      }
+
+      setTimeout(() => {
+        const key = `${activeDay}-${nextRow}-${nextCol}`;
+        const targetEl = inputRefs.current[key];
+        if (targetEl) {
+          targetEl.focus();
+          if ("select" in targetEl && typeof (targetEl as any).select === "function") {
+            (targetEl as any).select();
+          }
+        }
+      }, 60);
+    },
+    [activeDay, currentDayData, lastTrackingPrefix, handleCellChange, addRow]
+  );
+
+  // Handle header values edit (arrived / prevMonthLeftover)
+  const handleHeaderChange = useCallback((day: number, fieldKey: "arrived" | "prevMonthLeftover", value: string) => {
+    setData((prev) => {
+      const dayData = prev[day] || emptyDay();
+      return { ...prev, [day]: { ...dayData, [fieldKey]: value } };
+    });
+  }, []);
 
   // Delete a specific row
   const deleteRow = useCallback((rowIndex: number) => {
@@ -882,8 +1060,96 @@ export default function DailyReportApp() {
   };
 
 
+  // Import data FROM an Excel (.xlsx/.xls) file — expects the same column layout produced by
+  // exportXLSX: ថ្ងៃទី, #, ត្រឡប់, បូរទីកាំង, ផ្ញើចេញ, ថ្ងៃមុន, ថ្ងៃនេះ, លេខបៀល, លេខអ្នកទទួល,
+  // លេខអ្នកផ្ញើ, CC-Cash, COD KHR, បញ្ហា, កំណត់ចំណាំ. Rows are merged into the first empty slot
+  // of the matching day (existing data is never silently overwritten).
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleImportFile = async (file: File) => {
+    try {
+      const XLSX = await import("xlsx");
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const aoa: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+      if (!aoa.length || aoa.length < 2) {
+        showToast("ឯកសារ Excel នេះគ្មានទិន្នន័យ", "error");
+        return;
+      }
+
+      // Skip the header row (row 0); data starts at row 1.
+      const importRows = aoa.slice(1).filter((row) => row && row[0] !== "" && row[0] != null);
+      if (importRows.length === 0) {
+        showToast("រកមិនឃើញជួរដេកទិន្នន័យត្រឹមត្រូវក្នុងឯកសារនេះទេ", "error");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `រកឃើញ ${importRows.length} ជួរដេកក្នុងឯកសារ Excel។ ទិន្នន័យទាំងនេះនឹងត្រូវបញ្ចូលទៅក្នុងជួរទទេនៃថ្ងៃដែលត្រូវគ្នា (ទិន្នន័យមានស្រាប់មិនត្រូវបានលុបទេ)។ បន្តទេ?`
+      );
+      if (!confirmed) return;
+
+      setData((prev) => {
+        const next: MonthData = { ...prev };
+        let importedCount = 0;
+
+        for (const row of importRows) {
+          const day = parseInt(String(row[0]).trim(), 10);
+          if (!day || day < 1 || day > DAY_COUNT) continue;
+
+          const newRow: ReportRow = {
+            ret: String(row[2] ?? ""),
+            reloc: String(row[3] ?? ""),
+            sent: String(row[4] ?? ""),
+            prevday: String(row[5] ?? ""),
+            today: String(row[6] ?? ""),
+            tracking: String(row[7] ?? ""),
+            receiverPhone: String(row[8] ?? ""),
+            senderPhone: String(row[9] ?? ""),
+            cc: String(row[10] ?? ""),
+            cod: String(row[11] ?? ""),
+            issue: String(row[12] ?? ""),
+            other: String(row[13] ?? ""),
+          };
+
+          const dayObj = next[day] ? { ...next[day], rows: [...next[day].rows] } : emptyDay();
+          const emptyIdx = dayObj.rows.findIndex((r) => !r.tracking && !r.receiverPhone && !r.today && !r.prevday);
+          if (emptyIdx !== -1) {
+            dayObj.rows[emptyIdx] = newRow;
+          } else {
+            dayObj.rows.push(newRow);
+          }
+          next[day] = dayObj;
+          importedCount++;
+        }
+
+        showToast(`បាននាំចូល ${importedCount} ជួរដេកដោយជោគជ័យ!`, "success");
+        syncDataToServer(next);
+        return next;
+      });
+    } catch (err: any) {
+      console.error("Import failed:", err);
+      showToast("បរាជ័យក្នុងការអានឯកសារ Excel — សូមប្រាកដថាឯកសារត្រឹមត្រូវ", "error");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans">
+      {/* Autocomplete suggestion lists — wired to the tracking/receiverPhone inputs via list=... */}
+      <datalist id="tracking-suggestions">
+        {TRACKING_PREFIX_SUGGESTIONS.map((p) => (
+          <option key={`prefix-${p}`} value={p} />
+        ))}
+      </datalist>
+      <datalist id="phone-suggestions">
+        {allPhoneNumbers.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+
       {/* Toast Notification Floating Banner */}
       {toastMessage && (
         <div className="fixed top-4 right-4 z-50 max-w-md animate-bounce">
@@ -1002,6 +1268,26 @@ export default function DailyReportApp() {
               <Download className="w-4 h-4" />
             </button>
 
+            {/* Excel Import */}
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleImportFile(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => importInputRef.current?.click()}
+              title="នាំចូល Excel"
+              className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-xl transition"
+            >
+              <FileUp className="w-4 h-4" />
+            </button>
+
             {/* Clear Data / Reset */}
             <button
               onClick={() => setIsClearModalOpen(true)}
@@ -1015,18 +1301,19 @@ export default function DailyReportApp() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 w-full max-w-none p-2 sm:p-4 lg:p-6 space-y-4">
+      <main className="flex-1 w-full max-w-none p-2 sm:p-4 lg:p-6 space-y-2">
         {/* Days Navigation Bar */}
-        <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-2 w-full">
+        <div className="bg-white px-2 py-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1 w-full" style={{ marginTop: "0px", marginBottom: "2px" }}>
           <button
             onClick={() => setActiveDay((d) => Math.max(1, d - 1))}
             disabled={activeDay === 1}
-            className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            title="ថ្ងៃមុន (Previous Day)"
           >
-            <ChevronLeft className="w-5 h-5" />
+            <ChevronLeft className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex-1 flex items-center space-x-1.5 overflow-x-auto py-1 scrollbar-thin scrollbar-thumb-slate-300">
+          <div className="flex-1 grid grid-cols-[repeat(31,minmax(0,1fr))] gap-0.5 items-center justify-items-stretch">
             {Array.from({ length: DAY_COUNT }, (_, i) => i + 1).map((day) => (
               <button
                 key={day}
@@ -1034,10 +1321,11 @@ export default function DailyReportApp() {
                   setActiveDay(day);
                   setShowOverview(false);
                 }}
-                className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-xl transition min-w-[42px] shrink-0 ${
+                title={`ថ្ងៃទី ${day}`}
+                className={`py-1 px-0 text-[10px] sm:text-xs font-bold rounded-md transition text-center w-full truncate ${
                   activeDay === day && !showOverview
-                    ? "bg-gradient-to-r from-red-600 to-red-700 text-white shadow-md shadow-red-200 scale-105"
-                    : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                    ? "bg-red-600 text-white shadow-sm font-black"
+                    : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80"
                 }`}
               >
                 {day}
@@ -1048,9 +1336,10 @@ export default function DailyReportApp() {
           <button
             onClick={() => setActiveDay((d) => Math.min(DAY_COUNT, d + 1))}
             disabled={activeDay === DAY_COUNT}
-            className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            title="ថ្ងៃបន្ទាប់ (Next Day)"
           >
-            <ChevronRight className="w-5 h-5" />
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
@@ -1415,25 +1704,34 @@ export default function DailyReportApp() {
                               const isCustomOption = val && !ISSUE_OPTIONS.includes(val);
                               return (
                                 <td key={col.key} className={`p-1 border-r border-slate-200 ${col.widthClass || "min-w-[95px]"}`}>
-                                  <select
-                                    value={val}
-                                    onChange={(e) => handleCellChange(activeDay, idx, "issue", e.target.value)}
-                                    className={`w-full bg-slate-50 hover:bg-white text-xs px-1.5 py-1 rounded-lg border border-slate-300 focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500 cursor-pointer ${
-                                      val ? "font-semibold text-amber-800 bg-amber-50/50" : "text-slate-400"
-                                    }`}
-                                  >
-                                    <option value="" className="bg-white text-slate-400"></option>
-                                    {ISSUE_OPTIONS.map((opt) => (
-                                      <option key={opt} value={opt} className="bg-white text-slate-800 font-medium">
-                                        {opt}
-                                      </option>
-                                    ))}
-                                    {isCustomOption && (
-                                      <option value={val} className="bg-white text-amber-800">
-                                        {val}
-                                      </option>
-                                    )}
-                                  </select>
+                                  <div className="relative flex items-center group/issue">
+                                    <select
+                                      ref={(el) => (inputRefs.current[`${activeDay}-${idx}-issue`] = el)}
+                                      value={val}
+                                      onChange={(e) => handleCellChange(activeDay, idx, "issue", e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          handleEnterNavigation(e, idx, "issue");
+                                        }
+                                      }}
+                                      className={`w-full bg-transparent px-1.5 py-1 pr-5 rounded-lg border border-transparent hover:border-slate-300 focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 cursor-pointer appearance-none text-xs transition-colors ${
+                                        val ? "font-bold text-amber-800" : "text-slate-400"
+                                      }`}
+                                    >
+                                      <option value="" className="bg-white text-slate-400"></option>
+                                      {ISSUE_OPTIONS.map((opt) => (
+                                        <option key={opt} value={opt} className="bg-white text-slate-800 font-medium">
+                                          {opt}
+                                        </option>
+                                      ))}
+                                      {isCustomOption && (
+                                        <option value={val} className="bg-white text-amber-800">
+                                          {val}
+                                        </option>
+                                      )}
+                                    </select>
+                                    <ChevronDown className="w-3.5 h-3.5 text-amber-700 pointer-events-none absolute right-1 opacity-0 group-hover/issue:opacity-100 group-focus-within/issue:opacity-100 transition-opacity" />
+                                  </div>
                                 </td>
                               );
                             }
@@ -1441,22 +1739,140 @@ export default function DailyReportApp() {
                             const isTracking = col.key === "tracking";
                             const isReceiverPhone = col.key === "receiverPhone";
 
+                            if (isTracking) {
+                              return (
+                                <td key={col.key} className={`p-1 border-r border-slate-200 ${col.widthClass || "min-w-[145px]"}`}>
+                                  <div className="relative flex items-center group/track">
+                                    <input
+                                      ref={(el) => (inputRefs.current[`${activeDay}-${idx}-tracking`] = el)}
+                                      type="text"
+                                      value={val}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        const trimmed = raw.trim().toUpperCase();
+                                        if (/^\d+$/.test(trimmed)) {
+                                          if (trimmed.length >= 7) {
+                                            const formatted = formatTrackingNumber(trimmed, lastTrackingPrefix);
+                                            handleCellChange(activeDay, idx, "tracking", formatted);
+                                            const prefix = extractTrackingPrefix(formatted);
+                                            if (prefix) setLastTrackingPrefix(prefix);
+                                          } else {
+                                            handleCellChange(activeDay, idx, "tracking", raw);
+                                          }
+                                        } else {
+                                          handleCellChange(activeDay, idx, "tracking", raw);
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "ArrowUp") {
+                                          e.preventDefault();
+                                          const updated = adjustTrackingPrefix(val, "up", lastTrackingPrefix);
+                                          handleCellChange(activeDay, idx, "tracking", updated);
+                                          const prefix = extractTrackingPrefix(updated);
+                                          if (prefix) setLastTrackingPrefix(prefix);
+                                        } else if (e.key === "ArrowDown") {
+                                          e.preventDefault();
+                                          const updated = adjustTrackingPrefix(val, "down", lastTrackingPrefix);
+                                          handleCellChange(activeDay, idx, "tracking", updated);
+                                          const prefix = extractTrackingPrefix(updated);
+                                          if (prefix) setLastTrackingPrefix(prefix);
+                                        } else if (e.key === "Enter") {
+                                          handleEnterNavigation(e, idx, "tracking");
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        const formatted = formatTrackingNumber(e.target.value, lastTrackingPrefix);
+                                        if (formatted !== e.target.value) {
+                                          handleCellChange(activeDay, idx, "tracking", formatted);
+                                        }
+                                        const prefix = extractTrackingPrefix(formatted);
+                                        if (prefix) setLastTrackingPrefix(prefix);
+                                      }}
+                                      list="tracking-suggestions"
+                                      placeholder=""
+                                      className="w-full bg-transparent px-1 py-1 pr-5 rounded-lg text-slate-800 focus:bg-white focus:ring-1 focus:ring-red-500 font-mono font-bold text-xs sm:text-sm text-amber-800 tracking-wide text-left"
+                                    />
+                                    <div className="absolute right-0.5 top-1/2 -translate-y-1/2 flex flex-col opacity-0 group-hover/track:opacity-100 group-focus-within/track:opacity-100 transition-opacity duration-150">
+                                      <button
+                                        type="button"
+                                        tabIndex={-1}
+                                        onClick={() => {
+                                          const updated = adjustTrackingPrefix(val, "up", lastTrackingPrefix);
+                                          handleCellChange(activeDay, idx, "tracking", updated);
+                                          const prefix = extractTrackingPrefix(updated);
+                                          if (prefix) setLastTrackingPrefix(prefix);
+                                        }}
+                                        className="p-0 hover:bg-amber-200/80 text-amber-800 rounded transition flex items-center justify-center h-3 w-3.5"
+                                        title="ប្តូរក្បាលលេខឡើងលើ (e.g. J0138 → J0139)"
+                                      >
+                                        <ChevronUp className="w-3 h-3 stroke-[3]" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        tabIndex={-1}
+                                        onClick={() => {
+                                          const updated = adjustTrackingPrefix(val, "down", lastTrackingPrefix);
+                                          handleCellChange(activeDay, idx, "tracking", updated);
+                                          const prefix = extractTrackingPrefix(updated);
+                                          if (prefix) setLastTrackingPrefix(prefix);
+                                        }}
+                                        className="p-0 hover:bg-amber-200/80 text-amber-800 rounded transition flex items-center justify-center h-3 w-3.5"
+                                        title="ប្តូរក្បាលលេខចុះក្រោម (e.g. J0138 → J0137)"
+                                      >
+                                        <ChevronDown className="w-3 h-3 stroke-[3]" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+                              );
+                            }
+
+                            const rowConfirmed = parseVal(row.today) === 1 || parseVal(row.prevday) === 1;
+                            const phoneDupCount = isReceiverPhone && val && !rowConfirmed ? (currentDayPhoneCounts[val.trim()] || 0) : 0;
+
                             return (
                               <td key={col.key} className={`p-1 border-r border-slate-200 ${col.widthClass || "min-w-[95px]"}`}>
-                                <input
-                                  type={col.type === "number" ? "number" : "text"}
-                                  value={val}
-                                  onChange={(e) => handleCellChange(activeDay, idx, col.key as keyof ReportRow, e.target.value)}
-                                  className={`w-full bg-transparent px-1 py-1 rounded-lg text-slate-800 focus:bg-white focus:ring-1 focus:ring-red-500 ${
-                                    isTracking
-                                      ? "font-mono font-bold text-xs sm:text-sm text-amber-800 tracking-wide"
-                                      : isReceiverPhone
-                                      ? "font-mono font-bold text-xs sm:text-sm text-cyan-800 tracking-wide"
-                                      : col.mono
-                                      ? "font-mono"
-                                      : ""
-                                  } ${NUMBER_KEYS.includes(col.key) ? "text-center" : "text-left"}`}
-                                />
+                                <div className="relative">
+                                  <input
+                                    ref={(el) => (inputRefs.current[`${activeDay}-${idx}-${col.key}`] = el)}
+                                    type={col.type === "number" ? "number" : "text"}
+                                    value={val}
+                                    onChange={(e) => handleCellChange(activeDay, idx, col.key as keyof ReportRow, e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        handleEnterNavigation(e, idx, col.key);
+                                      }
+                                    }}
+                                    onBlur={(e) => {
+                                      if (isTracking) {
+                                        const formatted = formatTrackingNumber(e.target.value, lastTrackingPrefix);
+                                        if (formatted !== e.target.value) {
+                                          handleCellChange(activeDay, idx, "tracking", formatted);
+                                        }
+                                        const prefix = extractTrackingPrefix(formatted);
+                                        if (prefix) setLastTrackingPrefix(prefix);
+                                      }
+                                    }}
+                                    list={isTracking ? "tracking-suggestions" : isReceiverPhone ? "phone-suggestions" : undefined}
+                                    className={`w-full bg-transparent px-1 py-1 rounded-lg text-slate-800 focus:bg-white focus:ring-1 focus:ring-red-500 ${
+                                      isTracking
+                                        ? "font-mono font-bold text-xs sm:text-sm text-amber-800 tracking-wide"
+                                        : isReceiverPhone
+                                        ? `font-mono font-bold text-xs sm:text-sm tracking-wide ${phoneDupCount > 1 ? "text-red-600 pr-6" : "text-cyan-800"}`
+                                        : col.mono
+                                        ? "font-mono"
+                                        : ""
+                                    } ${NUMBER_KEYS.includes(col.key) ? "text-center" : "text-left"}`}
+                                  />
+                                  {phoneDupCount > 1 && (
+                                    <span
+                                      title={`លេខទូរស័ព្ទនេះលេចឡើង ${phoneDupCount} ដងក្នុងថ្ងៃនេះ`}
+                                      className="absolute right-0.5 top-1/2 -translate-y-1/2 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none"
+                                    >
+                                      ×{phoneDupCount}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                             );
                           })}

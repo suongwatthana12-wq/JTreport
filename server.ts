@@ -156,15 +156,17 @@ async function tryZxingDecode(luminances: Uint8ClampedArray, width: number, heig
  */
 async function scanBarcodeFromBuffer(buffer: Buffer): Promise<string | null> {
   try {
-    let image = await Jimp.read(buffer);
+    let image: any = await Jimp.read(buffer);
 
-    // Downscale very large camera photos for speed + reliability (keep aspect ratio)
-    const MAX_DIM = 1800;
+    // Downscale only truly huge camera photos (phones can be 3000-4000px+). Keep the cap higher
+    // than before (2200 vs 1800) — 1D barcodes have thin bars that lose too much detail if
+    // downscaled aggressively, which was likely causing real-world scans to fail.
+    const MAX_DIM = 2200;
     if (image.bitmap.width > MAX_DIM || image.bitmap.height > MAX_DIM) {
       const ratio = image.bitmap.width / image.bitmap.height;
       const targetW = ratio >= 1 ? MAX_DIM : Math.round(MAX_DIM * ratio);
       const targetH = ratio >= 1 ? Math.round(MAX_DIM / ratio) : MAX_DIM;
-      image = image.resize(targetW, targetH);
+      image = image.resize({ w: targetW, h: targetH });
     }
 
     const buildLuminances = (img: any) => {
@@ -184,32 +186,48 @@ async function scanBarcodeFromBuffer(buffer: Buffer): Promise<string | null> {
 
     // Track the best-looking-but-invalid candidate too, purely for debug logging.
     let lastRejected: string | null = null;
-    const tryStage = async (img: any): Promise<string | null> => {
-      const { luminances, width, height, rgba } = buildLuminances(img);
 
-      const zxingResult = await tryZxingDecode(luminances, width, height);
-      if (looksLikeTrackingCode(zxingResult)) return zxingResult;
-      if (zxingResult) lastRejected = zxingResult;
+    // 1D barcodes (Code128/etc.) are orientation-sensitive — a photo taken with the phone
+    // held sideways relative to the label can make the bars vertical instead of horizontal,
+    // which zxing can fail to read even with TRY_HARDER. Try a few rotations too.
+    const tryStageWithRotations = async (img: any, rotations: number[]): Promise<string | null> => {
+      for (const angle of rotations) {
+        try {
+          const rotated = angle === 0 ? img : img.clone().rotate(angle);
+          const { luminances, width, height, rgba } = buildLuminances(rotated);
 
-      const qrResult = await tryJsQr(rgba as any, width, height);
-      if (looksLikeTrackingCode(qrResult)) return qrResult;
-      if (qrResult) lastRejected = qrResult;
+          const zxingResult = await tryZxingDecode(luminances, width, height);
+          if (looksLikeTrackingCode(zxingResult)) return zxingResult;
+          if (zxingResult) lastRejected = zxingResult;
 
+          // jsQR is rotation-invariant on its own (QR finder patterns work at any angle), so only
+          // run it once per image variant (angle 0) to avoid redundant work.
+          if (angle === 0) {
+            const qrResult = await tryJsQr(rgba as any, width, height);
+            if (looksLikeTrackingCode(qrResult)) return qrResult;
+            if (qrResult) lastRejected = qrResult;
+          }
+        } catch (err: any) {
+          console.error(`scanBarcodeFromBuffer: rotation ${angle} attempt failed:`, err.message);
+        }
+      }
       return null;
     };
 
-    // --- Attempt 1: plain image ---
-    let found = await tryStage(image);
+    const ROTATIONS = [0, 90, 180, 270];
+
+    // --- Attempt 1: plain image, all rotations ---
+    let found = await tryStageWithRotations(image, ROTATIONS);
     if (found) return found;
 
     // --- Attempt 2: boosted contrast + normalized (helps glare/low-contrast labels) ---
     const boosted = image.clone().contrast(0.35).normalize();
-    found = await tryStage(boosted);
+    found = await tryStageWithRotations(boosted, ROTATIONS);
     if (found) return found;
 
-    // --- Attempt 3: greyscale ---
+    // --- Attempt 3: greyscale, all rotations ---
     const grey = image.clone().greyscale();
-    found = await tryStage(grey);
+    found = await tryStageWithRotations(grey, ROTATIONS);
     if (found) return found;
 
     if (lastRejected) {
@@ -287,7 +305,7 @@ async function extractReceiverPhoneFromImage(buffer: Buffer): Promise<string | n
     const worker = await getOcrWorker();
     if (!worker) return null;
 
-    const { data } = await withTimeout(worker.recognize(buffer), 20000, "OCR recognize");
+    const { data } = await withTimeout<any>(worker.recognize(buffer), 20000, "OCR recognize");
     const text = data.text || "";
     const lines = text.split("\n");
 
@@ -308,15 +326,22 @@ async function extractReceiverPhoneFromImage(buffer: Buffer): Promise<string | n
   }
 }
 
-// Parse Telegram message formatted like 'scan:TRACKING_NO|PHONE_NO' or 'scan:TRACKING_NO|PHONE_NO|DAY'
+// Parse Telegram message formatted like 'scan:TRACKING_NO|PHONE_NO' or 'scan:TRACKING_NO|PHONE_NO|DAY'.
+// Forgiving of manual typing: accepts '|', ',', or plain whitespace as the separator between
+// tracking / phone / day, since people typing this by hand often forget the exact '|' character.
 function parseScanCommand(text: string) {
   if (!text) return null;
   const trimmed = text.trim();
-  const match = trimmed.match(/^scan:\s*([^|]+)(?:\|\s*([^|]*))?(?:\|\s*(\d+))?$/i);
-  if (!match) return null;
-  const tracking = match[1].trim();
-  const phone = match[2] ? match[2].trim() : "";
-  const dayStr = match[3] ? match[3].trim() : "";
+  const scanMatch = trimmed.match(/^scan:\s*(.+)$/i);
+  if (!scanMatch) return null;
+  const rest = scanMatch[1].trim();
+  if (!rest) return null;
+
+  const parts = rest.split(/[|,]+|\s+/).map((p) => p.trim()).filter(Boolean);
+  const tracking = parts[0] || "";
+  if (!tracking) return null;
+  const phone = parts[1] || "";
+  const dayStr = parts[2] && /^\d+$/.test(parts[2]) ? parts[2] : "";
   return { tracking, phone, dayStr };
 }
 
