@@ -651,10 +651,36 @@ export default function DailyReportApp() {
   // prefix is remembered here so the NEXT row only needs the trailing digits typed in.
   const [lastTrackingPrefix, setLastTrackingPrefix] = useState<string>("");
 
+  // Build a chained remaining-per-day table so each day's prevLeftover is
+  // the PREVIOUS day's computed remaining (not the stored prevMonthLeftover).
+  // Day 1 is the only day that reads the manually-entered prevMonthLeftover.
+  const allDayRemainings = useMemo(() => {
+    const result: Record<number, number> = {};
+    for (let d = 1; d <= DAY_COUNT; d++) {
+      const dayObj = data[d] || emptyDay();
+      const arr = parseVal(dayObj.arrived);
+      const prevL = d === 1 ? parseVal(dayObj.prevMonthLeftover) : (result[d - 1] ?? 0);
+      let t = 0, p = 0, r = 0, l = 0;
+      (dayObj.rows || []).forEach((row) => {
+        t += parseVal(row.today);
+        p += parseVal(row.prevday);
+        r += parseVal(row.ret);
+        l += parseVal(row.reloc);
+      });
+      result[d] = arr + prevL - (t + p + r + l);
+    }
+    return result;
+  }, [data]);
+
   // Calculate stats for active day
   const activeDayStats = useMemo(() => {
     const arrived = parseVal(currentDayData.arrived);
-    const prevLeftover = parseVal(currentDayData.prevMonthLeftover);
+
+    // Day 1: use the manually-entered "នៅសល់ខែចាស់" (prev month leftover).
+    // Day 2–31: use the chained remaining from the previous day.
+    const prevLeftover = activeDay === 1
+      ? parseVal(currentDayData.prevMonthLeftover)
+      : (allDayRemainings[activeDay - 1] ?? 0);
 
     let todayCount = 0;
     let prevdayCount = 0;
@@ -693,7 +719,7 @@ export default function DailyReportApp() {
       ccTotal,
       dividend,
     };
-  }, [currentDayData]);
+  }, [currentDayData, activeDay, allDayRemainings]);
 
   // Monthly totals across all days
   const monthlyStats = useMemo(() => {
@@ -1550,16 +1576,25 @@ export default function DailyReportApp() {
                     />
                   </div>
 
-                  <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                    <label className="text-xs text-slate-600 font-medium">នៅសល់ខែចាស់:</label>
-                    <input
-                      type="number"
-                      value={currentDayData.prevMonthLeftover || ""}
-                      onChange={(e) => handleHeaderChange(activeDay, "prevMonthLeftover", e.target.value)}
-                      placeholder="0"
-                      className="w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-amber-600 focus:outline-none focus:border-red-500"
-                    />
-                  </div>
+                  {activeDay === 1 ? (
+                    <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                      <label className="text-xs text-slate-600 font-medium">នៅសល់ខែចាស់:</label>
+                      <input
+                        type="number"
+                        value={currentDayData.prevMonthLeftover || ""}
+                        onChange={(e) => handleHeaderChange(activeDay, "prevMonthLeftover", e.target.value)}
+                        placeholder="0"
+                        className="w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-amber-600 focus:outline-none focus:border-red-500"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                      <label className="text-xs text-slate-600 font-medium">សល់ម្សិលមិញ:</label>
+                      <span className="w-20 px-2 py-0.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-center font-bold text-violet-700 select-none">
+                        {allDayRemainings[activeDay - 1] ?? 0}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1599,9 +1634,9 @@ export default function DailyReportApp() {
                   <span className="text-slate-500 font-medium block mb-0.5">CC Cash</span>
                   <span className="font-bold text-teal-700 text-xs sm:text-sm">{activeDayStats.ccTotal.toLocaleString()}</span>
                 </div>
-                <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-300 shadow-sm">
-                  <span className="text-amber-800 block mb-0.5 font-bold">ភាគលាភ</span>
-                  <span className="font-black text-amber-700 text-xs sm:text-sm">{activeDayStats.dividend.toLocaleString()} ៛</span>
+                <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-300 shadow-sm">
+                  <span className="text-sky-800 block mb-0.5 font-bold">ចាំចែកចាយ</span>
+                  <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.arrived - activeDayStats.todayCount}</span>
                 </div>
               </div>
             </div>
