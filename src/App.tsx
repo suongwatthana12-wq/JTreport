@@ -1289,85 +1289,106 @@ export default function DailyReportApp() {
               </span>
             </div>
 
-            {/* Dividend Highlight Banner */}
-            <div className="bg-gradient-to-br from-amber-50 via-orange-50/60 to-yellow-50 p-4 sm:p-5 rounded-2xl border border-amber-300 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <span className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+            {/* Top Financial Overview Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Card 1: Total Dividend */}
+              <div className="bg-gradient-to-br from-amber-50 to-orange-50/70 p-3.5 sm:p-4 rounded-xl border border-amber-200/80 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
                     <Coins className="w-4 h-4 text-amber-600" />
-                    <span>ប្រាក់ភាគលាភសរុបប្រចាំខែ (Total Monthly Dividend)</span>
+                    <span>ប្រាក់ភាគលាភសរុបប្រចាំខែ</span>
                   </span>
-                  <p className="text-2xl sm:text-3xl font-black text-amber-700">
-                    {monthlyStats.totalDividend.toLocaleString()} <span className="text-base font-semibold text-amber-800">KHR (៛)</span>
-                  </p>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 bg-amber-100/90 text-amber-800 rounded-md border border-amber-200">
+                    Dividend
+                  </span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs bg-white/90 p-2.5 rounded-xl border border-amber-200 shadow-sm">
-                  <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg font-semibold">
-                    ថ្ងៃនេះ: <strong>900៛</strong>/កញ្ចប់
+                <div className="mt-2 flex items-baseline justify-between">
+                  <p className="text-xl sm:text-2xl font-black text-amber-700">
+                    {monthlyStats.totalDividend.toLocaleString()} <span className="text-xs font-bold text-amber-800">KHR</span>
+                  </p>
+                  <div className="text-[10px] text-amber-800/80 font-medium">
+                    900៛ / 800៛ / 1000៛
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: COD & CC Cash */}
+              <div className="bg-slate-50 p-3.5 sm:p-4 rounded-xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span>💵 COD & CC Cash សរុប</span>
+                  <span className="text-[10px] text-slate-500 font-medium">តាមប្រភេទ</span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="text-[10px] text-slate-500 font-medium block">COD ត្រូវប្រមូល</span>
+                    <span className="font-bold text-amber-600 text-xs sm:text-sm">
+                      {monthlyStats.totalCOD.toLocaleString()} <span className="text-[10px]">៛</span>
+                    </span>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="text-[10px] text-slate-500 font-medium block">CC Cash</span>
+                    <span className="font-bold text-emerald-600 text-xs sm:text-sm">
+                      {monthlyStats.totalCC.toLocaleString()} <span className="text-[10px]">៛</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Total Money Collected (CC + COD) */}
+              <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-3.5 sm:p-4 rounded-xl border border-indigo-200/90 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                    💰 <span>ទឹកប្រាក់សរុប (CC Cash + COD)</span>
                   </span>
-                  <span className="px-2.5 py-1 bg-cyan-50 text-cyan-800 border border-cyan-200 rounded-lg font-semibold">
-                    ថ្ងៃមុន: <strong>800៛</strong>/កញ្ចប់
+                  <span className="text-[10px] font-semibold px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded-md border border-indigo-200">
+                    Total Income
                   </span>
-                  <span className="px-2.5 py-1 bg-purple-50 text-purple-800 border border-purple-200 rounded-lg font-semibold">
-                    ផ្ញើចេញ: <strong>1,000៛</strong>/កញ្ចប់
+                </div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <p className="text-xl sm:text-2xl font-black text-indigo-700">
+                    {(monthlyStats.totalCOD + monthlyStats.totalCC).toLocaleString()}{" "}
+                    <span className="text-xs font-bold text-indigo-800">KHR</span>
+                  </p>
+                  <span className="text-[10px] text-indigo-700 font-medium">
+                    (COD + CC)
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 sm:gap-4">
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ទំនិញមកដល់សរុប</span>
-                <p className="text-xl sm:text-2xl font-black text-blue-600 mt-1">{monthlyStats.totalArrived}</p>
+            {/* Parcel Count Metrics (Compact 8-Column Grid) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mt-3">
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ទំនិញមកដល់</span>
+                <span className="font-extrabold text-blue-600 text-base">{monthlyStats.totalArrived}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ប្រគល់ថ្ងៃនេះសរុប (Today - 900៛)</span>
-                <p className="text-xl sm:text-2xl font-black text-emerald-600 mt-1">{monthlyStats.totalToday}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃនេះ (900៛)</span>
+                <span className="font-extrabold text-emerald-600 text-base">{monthlyStats.totalToday}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ប្រគល់ថ្ងៃមុនសរុប (PrevDay - 800៛)</span>
-                <p className="text-xl sm:text-2xl font-black text-cyan-600 mt-1">{monthlyStats.totalPrevDay}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃមុន (800៛)</span>
+                <span className="font-extrabold text-cyan-600 text-base">{monthlyStats.totalPrevDay}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ត្រឡប់សរុប (Return)</span>
-                <p className="text-xl sm:text-2xl font-black text-red-600 mt-1">{monthlyStats.totalRet}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ផ្ញើចេញ (1,000៛)</span>
+                <span className="font-extrabold text-purple-600 text-base">{monthlyStats.totalSent}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ប្តូរទីតាំងសរុប (Relocate)</span>
-                <p className="text-xl sm:text-2xl font-black text-amber-600 mt-1">{monthlyStats.totalReloc}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ត្រឡប់ (Return)</span>
+                <span className="font-extrabold text-red-600 text-base">{monthlyStats.totalRet}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ផ្ញើចេញសរុប (Sent - 1000៛)</span>
-                <p className="text-xl sm:text-2xl font-black text-purple-600 mt-1">{monthlyStats.totalSent}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ប្តូរទីតាំង</span>
+                <span className="font-extrabold text-amber-600 text-base">{monthlyStats.totalReloc}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">សរុបប្រគល់ចេញទាំងអស់</span>
-                <p className="text-xl sm:text-2xl font-black text-teal-600 mt-1">{monthlyStats.totalOut}</p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">សរុបប្រគល់</span>
+                <span className="font-extrabold text-teal-600 text-base">{monthlyStats.totalOut}</span>
               </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold">ចំនួនបៀលកត់ត្រា</span>
-                <p className="text-xl sm:text-2xl font-black text-indigo-600 mt-1">{monthlyStats.totalParcelsLogged}</p>
-              </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm col-span-2 sm:col-span-2">
-                <span className="text-xs text-slate-500 font-semibold">សរុប COD ត្រូវប្រមូល (KHR)</span>
-                <p className="text-2xl sm:text-3xl font-black text-amber-600 mt-1">
-                  {monthlyStats.totalCOD.toLocaleString()} <span className="text-sm font-semibold text-amber-700">KHR</span>
-                </p>
-              </div>
-
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm col-span-2 sm:col-span-2">
-                <span className="text-xs text-slate-500 font-semibold">សរុប CC Cash (KHR)</span>
-                <p className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1">
-                  {monthlyStats.totalCC.toLocaleString()} <span className="text-sm font-semibold text-emerald-700">KHR</span>
-                </p>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ចំនួនបៀលកត់ត្រា</span>
+                <span className="font-extrabold text-indigo-600 text-base">{monthlyStats.totalParcelsLogged}</span>
               </div>
             </div>
 
@@ -1506,7 +1527,7 @@ export default function DailyReportApp() {
               </div>
 
               {/* Metric Quick Summary Badges */}
-              <div className="grid grid-cols-3 sm:grid-cols-3 lg:grid-cols-9 gap-2 text-center text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2 text-center text-xs">
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">ថ្ងៃនេះ</span>
                   <span className="font-bold text-emerald-600 text-base">{activeDayStats.todayCount}</span>
@@ -1527,6 +1548,10 @@ export default function DailyReportApp() {
                   <span className="text-slate-500 font-medium block mb-0.5">ផ្ញើចេញ</span>
                   <span className="font-bold text-purple-600 text-base">{activeDayStats.sentCount}</span>
                 </div>
+                <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-300 shadow-sm">
+                  <span className="text-sky-800 block mb-0.5 font-bold">ចាំចែកចាយ</span>
+                  <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.arrived - activeDayStats.todayCount}</span>
+                </div>
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">នៅសល់</span>
                   <span className={`font-bold text-base ${activeDayStats.remaining < 0 ? "text-red-600" : "text-slate-800"}`}>
@@ -1541,9 +1566,11 @@ export default function DailyReportApp() {
                   <span className="text-slate-500 font-medium block mb-0.5">CC Cash</span>
                   <span className="font-bold text-teal-700 text-xs sm:text-sm">{activeDayStats.ccTotal.toLocaleString()}</span>
                 </div>
-                <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-300 shadow-sm">
-                  <span className="text-sky-800 block mb-0.5 font-bold">ចាំចែកចាយ</span>
-                  <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.arrived - activeDayStats.todayCount}</span>
+                <div className="bg-indigo-50 p-2.5 rounded-xl border border-indigo-200 shadow-sm">
+                  <span className="text-indigo-900 font-bold block mb-0.5">សរុប CC+COD</span>
+                  <span className="font-extrabold text-indigo-700 text-xs sm:text-sm">
+                    {(activeDayStats.codTotal + activeDayStats.ccTotal).toLocaleString()}
+                  </span>
                 </div>
               </div>
             </div>
