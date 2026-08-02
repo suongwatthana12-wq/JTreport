@@ -416,7 +416,6 @@ export default function DailyReportApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
@@ -1034,131 +1033,46 @@ export default function DailyReportApp() {
     }, 200);
   };
 
-  // Copy active day summary text
-  const copySummary = () => {
-    const text = `📋 របាយការណ៍ប្រចាំថ្ងៃ - ថ្ងៃទី ${activeDay}
-----------------------------------
-ទំនិញមកដល់: ${activeDayStats.arrived}
-នៅសល់ខែចាស់: ${activeDayStats.prevLeftover}
-ប្រគល់ថ្ងៃនេះ (Today): ${activeDayStats.todayCount}
-ប្រគល់ថ្ងៃមុន (PrevDay): ${activeDayStats.prevdayCount}
-ត្រឡប់ (Return): ${activeDayStats.retCount}
-ប្តូរទីតាំង (Relocate): ${activeDayStats.relocCount}
-ផ្ញើចេញ (Sent): ${activeDayStats.sentCount}
-----------------------------------
-សរុបប្រគល់ចេញ: ${activeDayStats.totalOut}
-នៅសល់ចុងក្រោយ: ${activeDayStats.remaining}
-----------------------------------
-សរុប COD: ${activeDayStats.codTotal.toLocaleString()} KHR
-សរុប CC Cash: ${activeDayStats.ccTotal.toLocaleString()} KHR`;
-
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Export report to a real .xlsx Excel file (not CSV) — avoids Khmer text encoding issues
-  // that can happen when Excel opens a plain CSV, and gives a properly formatted native file.
-  const exportXLSX = async () => {
-    const XLSX = await import("xlsx");
-    const headers = [
-      "ថ្ងៃទី", "#", "ត្រឡប់", "បូរទីកាំង", "ផ្ញើចេញ", "ថ្ងៃមុន", "ថ្ងៃនេះ",
-      "លេខបៀល", "លេខអ្នកទទួល", "លេខអ្នកផ្ញើ", "CC-Cash", "COD KHR", "បញ្ហា", "កំណត់ចំណាំ"
-    ];
-    const rowsAoa: (string | number)[][] = [headers];
-    for (let d = 1; d <= DAY_COUNT; d++) {
-      const dayObj = data[d];
-      if (!dayObj) continue;
-      dayObj.rows.forEach((r, idx) => {
-        if (r.tracking || r.receiverPhone || r.today || r.prevday || r.cod || r.cc) {
-          rowsAoa.push([
-            d, idx + 1, r.ret, r.reloc, r.sent, r.prevday, r.today,
-            r.tracking, r.receiverPhone, r.senderPhone, r.cc, r.cod, r.issue, r.other
-          ]);
-        }
-      });
-    }
-    const worksheet = XLSX.utils.aoa_to_sheet(rowsAoa);
-    worksheet["!cols"] = headers.map(() => ({ wch: 16 }));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "J&T Report");
-    XLSX.writeFile(workbook, "JT_Daily_Report_Month_Export.xlsx");
-  };
-
-
-  // Import data FROM an Excel (.xlsx/.xls) file — expects the same column layout produced by
-  // exportXLSX: ថ្ងៃទី, #, ត្រឡប់, បូរទីកាំង, ផ្ញើចេញ, ថ្ងៃមុន, ថ្ងៃនេះ, លេខបៀល, លេខអ្នកទទួល,
-  // លេខអ្នកផ្ញើ, CC-Cash, COD KHR, បញ្ហា, កំណត់ចំណាំ. Rows are merged into the first empty slot
-  // of the matching day (existing data is never silently overwritten).
-  const importInputRef = useRef<HTMLInputElement | null>(null);
-
-  const handleImportFile = async (file: File) => {
+  // Export current month stock data as a formatted .json file
+  const exportJSON = () => {
     try {
-      const XLSX = await import("xlsx");
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array" });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const aoa: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-
-      if (!aoa.length || aoa.length < 2) {
-        showToast("ឯកសារ Excel នេះគ្មានទិន្នន័យ", "error");
-        return;
-      }
-
-      // Skip the header row (row 0); data starts at row 1.
-      const importRows = aoa.slice(1).filter((row) => row && row[0] !== "" && row[0] != null);
-      if (importRows.length === 0) {
-        showToast("រកមិនឃើញជួរដេកទិន្នន័យត្រឹមត្រូវក្នុងឯកសារនេះទេ", "error");
-        return;
-      }
-
-      const confirmed = window.confirm(
-        `រកឃើញ ${importRows.length} ជួរដេកក្នុងឯកសារ Excel។ ទិន្នន័យទាំងនេះនឹងត្រូវបញ្ចូលទៅក្នុងជួរទទេនៃថ្ងៃដែលត្រូវគ្នា (ទិន្នន័យមានស្រាប់មិនត្រូវបានលុបទេ)។ បន្តទេ?`
-      );
-      if (!confirmed) return;
-
-      setData((prev) => {
-        const next: MonthData = { ...prev };
-        let importedCount = 0;
-
-        for (const row of importRows) {
-          const day = parseInt(String(row[0]).trim(), 10);
-          if (!day || day < 1 || day > DAY_COUNT) continue;
-
-          const newRow: ReportRow = {
-            ret: String(row[2] ?? ""),
-            reloc: String(row[3] ?? ""),
-            sent: String(row[4] ?? ""),
-            prevday: String(row[5] ?? ""),
-            today: String(row[6] ?? ""),
-            tracking: String(row[7] ?? ""),
-            receiverPhone: String(row[8] ?? ""),
-            senderPhone: String(row[9] ?? ""),
-            cc: String(row[10] ?? ""),
-            cod: String(row[11] ?? ""),
-            issue: String(row[12] ?? ""),
-            other: String(row[13] ?? ""),
-          };
-
-          const dayObj = next[day] ? { ...next[day], rows: [...next[day].rows] } : emptyDay();
-          const emptyIdx = dayObj.rows.findIndex((r) => !r.tracking && !r.receiverPhone && !r.today && !r.prevday);
-          if (emptyIdx !== -1) {
-            dayObj.rows[emptyIdx] = newRow;
-          } else {
-            dayObj.rows.push(newRow);
-          }
-          next[day] = dayObj;
-          importedCount++;
-        }
-
-        showToast(`បាននាំចូល ${importedCount} ជួរដេកដោយជោគជ័យ!`, "success");
-        syncDataToServer(next);
-        return next;
-      });
+      const jsonString = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const timestamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `JT_Stock_Report_${timestamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("បាននាំចេញឯកសារ JSON ដោយជោគជ័យ!", "success");
     } catch (err: any) {
-      console.error("Import failed:", err);
-      showToast("បរាជ័យក្នុងការអានឯកសារ Excel — សូមប្រាកដថាឯកសារត្រឹមត្រូវ", "error");
+      showToast(`បរាជ័យក្នុងការនាំចេញ JSON: ${err.message}`, "error");
+    }
+  };
+
+  // Import stock data from a selected .json file
+  const jsonInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleImportJSON = async (file: File) => {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object") {
+        showToast("ឯកសារ JSON នេះគ្មានទិន្នន័យត្រឹមត្រូវទេ", "error");
+        return;
+      }
+      const targetData = parsed.stockData || parsed;
+      const merged = mergeWithDefaults(targetData);
+      setData(merged);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      syncDataToServer(merged);
+      showToast("បាននាំចូលទិន្នន័យស្តុកពីឯកសារ JSON ដោយជោគជ័យ!", "success");
+    } catch (err: any) {
+      console.error("JSON Import failed:", err);
+      showToast(`បរាជ័យក្នុងការអានឯកសារ JSON: ${err.message}`, "error");
     }
   };
 
@@ -1276,42 +1190,35 @@ export default function DailyReportApp() {
               <span>{showOverview ? "មើលតារាងថ្ងៃ" : "សរុបប្រចាំខែ"}</span>
             </button>
 
-            {/* Copy Summary Text */}
+            {/* JSON Export */}
             <button
-              onClick={copySummary}
+              onClick={exportJSON}
               className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
-            >
-              {copied ? <Check className="w-4 h-4" /> : <ClipboardList className="w-4 h-4" />}
-              <span className="hidden sm:inline">{copied ? "បានចម្លង!" : "ចម្លងរបាយការណ៍"}</span>
-            </button>
-
-            {/* Excel Export */}
-            <button
-              onClick={exportXLSX}
-              title="ទាញយក Excel"
-              className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-xl transition"
+              title="នាំចេញទិន្នន័យជាឯកសារ JSON (Export JSON)"
             >
               <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">នាំចេញ JSON</span>
             </button>
 
-            {/* Excel Import */}
+            {/* JSON Import */}
             <input
-              ref={importInputRef}
+              ref={jsonInputRef}
               type="file"
-              accept=".xlsx,.xls"
+              accept=".json"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) handleImportFile(file);
+                if (file) handleImportJSON(file);
                 e.target.value = "";
               }}
             />
             <button
-              onClick={() => importInputRef.current?.click()}
-              title="នាំចូល Excel"
-              className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-xl transition"
+              onClick={() => jsonInputRef.current?.click()}
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
+              title="នាំចូលទិន្នន័យពីឯកសារ JSON (Import JSON)"
             >
               <FileUp className="w-4 h-4" />
+              <span className="hidden sm:inline">នាំចូល JSON</span>
             </button>
 
             {/* Clear Data / Reset */}
