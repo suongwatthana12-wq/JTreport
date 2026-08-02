@@ -73,11 +73,11 @@ function formatTelegramError(resData: any, actionName: string, targetChatId?: st
 let serverStockData: Record<string, any> | null = null;
 let serverLastUpdated: number = Date.now();
 let lastTelegramUpdateId: number = 0;
+let lastTelegramScanTime: number = 0;
+let lastTelegramScanId: string = "";
 
 // Disk-persisted Telegram save cache — survives server restarts.
-// Stores the file_id of the last successfully saved stock document so Sync can
-// call getFile directly without relying on getUpdates (which permanently
-// discards acknowledged updates and cannot be used as a message history).
+// Stores the file_id of the last successfully saved stock document and the last Telegram update_id
 const TELEGRAM_CACHE_FILE = path.join(process.cwd(), ".telegram_cache.json");
 
 interface TelegramCache {
@@ -85,6 +85,7 @@ interface TelegramCache {
   messageDate: number;
   fileName: string;
   savedAt: number;
+  lastUpdateId?: number;
 }
 
 let telegramCache: TelegramCache | null = null;
@@ -94,7 +95,10 @@ function loadTelegramCache() {
     if (fs.existsSync(TELEGRAM_CACHE_FILE)) {
       const raw = fs.readFileSync(TELEGRAM_CACHE_FILE, "utf-8");
       telegramCache = JSON.parse(raw);
-      console.log(`[Telegram Cache] Loaded file_id: ${telegramCache?.fileId} (saved ${telegramCache?.fileName})`);
+      if (telegramCache?.lastUpdateId) {
+        lastTelegramUpdateId = telegramCache.lastUpdateId;
+      }
+      console.log(`[Telegram Cache] Loaded file_id: ${telegramCache?.fileId}, lastUpdateId: ${lastTelegramUpdateId}`);
     }
   } catch (e: any) {
     console.warn(`[Telegram Cache] Could not load cache: ${e.message}`);
@@ -102,11 +106,16 @@ function loadTelegramCache() {
   }
 }
 
-function saveTelegramCache(cache: TelegramCache) {
+function saveTelegramCache(cache: Partial<TelegramCache>) {
   try {
-    telegramCache = cache;
-    fs.writeFileSync(TELEGRAM_CACHE_FILE, JSON.stringify(cache, null, 2), "utf-8");
-    console.log(`[Telegram Cache] Saved file_id: ${cache.fileId}`);
+    telegramCache = {
+      fileId: cache.fileId !== undefined ? cache.fileId : (telegramCache?.fileId || ""),
+      messageDate: cache.messageDate !== undefined ? cache.messageDate : (telegramCache?.messageDate || Math.floor(Date.now() / 1000)),
+      fileName: cache.fileName !== undefined ? cache.fileName : (telegramCache?.fileName || ""),
+      savedAt: cache.savedAt !== undefined ? cache.savedAt : (telegramCache?.savedAt || Date.now()),
+      lastUpdateId: cache.lastUpdateId !== undefined ? cache.lastUpdateId : (telegramCache?.lastUpdateId || lastTelegramUpdateId),
+    };
+    fs.writeFileSync(TELEGRAM_CACHE_FILE, JSON.stringify(telegramCache, null, 2), "utf-8");
   } catch (e: any) {
     console.warn(`[Telegram Cache] Could not write cache: ${e.message}`);
   }
@@ -185,8 +194,8 @@ async function tryZxingDecode(luminances: Uint8ClampedArray, width: number, heig
   // the terminal stays readable — we still return null/found normally either way.
   const originalError = console.error;
   const originalWarn = console.warn;
-  console.error = () => {};
-  console.warn = () => {};
+  console.error = () => { };
+  console.warn = () => { };
   try {
     const luminanceSource = new RGBLuminanceSource(luminances, width, height);
     const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
@@ -474,6 +483,8 @@ async function processIncomingScanCommand(text: string, chatId?: string | number
 
   serverStockData = stock;
   serverLastUpdated = Date.now();
+  lastTelegramScanTime = serverLastUpdated;
+  lastTelegramScanId = `scan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
   console.log(`[Telegram Bot Scan] Updated day ${targetDay}, row ${targetRowIndex + 1}: tracking=${tracking}, phone=${phone}`);
 
@@ -549,7 +560,7 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
 
       // Reply back to Telegram user as requested
       const replyText = `✅ ស្កែនជោគជ័យ!\n----------------------------------\n📦 លេខបៀល (Tracking): ${scannedCode}\n📱 លេខអ្នកទទួល (Receiver): ${receiverPhone || "⚠️ រកមិនឃើញ សូមបំពេញដោយដៃ"}\n----------------------------------\n📦 បានរក្សាទុកក្នុងប្រព័ន្ធ Web App ដោយស្វ័យប្រវត្តិ!\n#JT_PHOTO_SCAN_SUCCESS`;
-      
+
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -584,7 +595,7 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
           text: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ។"
         })
       });
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -603,6 +614,8 @@ async function processTelegramDocumentMessage(doc: any, chatId: string | number,
     if (parsedStockData && typeof parsedStockData === "object") {
       serverStockData = parsedStockData;
       serverLastUpdated = Date.now();
+      lastTelegramScanTime = serverLastUpdated;
+      lastTelegramScanId = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
       saveTelegramCache({
         fileId: doc.file_id,
@@ -623,7 +636,7 @@ async function processTelegramDocumentMessage(doc: any, chatId: string | number,
             text: `✅ ទទួលបាន និងទាញយកទិន្នន័យពីឯកសារ JSON (${fileName}) ចូលក្នុង Web App ដោយជោគជ័យ!\n----------------------------------\n#JT_JSON_IMPORT_SUCCESS`
           })
         });
-      } catch (replyErr) {}
+      } catch (replyErr) { }
     }
   } catch (err: any) {
     console.error("Error processing Telegram document message:", err);
@@ -636,17 +649,23 @@ async function pollTelegramUpdates() {
     const token = DEFAULT_BOT_TOKEN;
     if (!token) return;
 
-    const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${lastTelegramUpdateId + 1}&limit=20&allowed_updates=["message","channel_post"]`);
+    const offset = lastTelegramUpdateId > 0 ? lastTelegramUpdateId + 1 : 0;
+    const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&limit=20&allowed_updates=["message","channel_post"]`);
     const data = await res.json();
 
     if (!data.ok) {
-      console.error("[Telegram getUpdates failed]", data.error_code, data.description);
+      if (data.error_code !== 404 && data.error_code !== 409) {
+        console.error("[Telegram getUpdates failed]", data.error_code, data.description);
+      }
       return;
     }
 
-    if (data.ok && Array.isArray(data.result)) {
+    if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+      let maxUpdateId = lastTelegramUpdateId;
       for (const update of data.result) {
-        lastTelegramUpdateId = Math.max(lastTelegramUpdateId, update.update_id);
+        if (update.update_id > maxUpdateId) {
+          maxUpdateId = update.update_id;
+        }
         const msg = update.message || update.channel_post;
         if (!msg) continue;
 
@@ -663,6 +682,15 @@ async function pollTelegramUpdates() {
           await processIncomingScanCommand(text, chatId, token);
         }
       }
+
+      // Update and persist last Telegram update_id to prevent duplicate processing
+      lastTelegramUpdateId = maxUpdateId;
+      saveTelegramCache({ lastUpdateId: maxUpdateId });
+
+      // Acknowledge updates with Telegram API by setting offset = maxUpdateId + 1
+      try {
+        await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${maxUpdateId + 1}&limit=1`);
+      } catch (ackErr) { }
     }
   } catch (err: any) {
     console.error("[pollTelegramUpdates error]", err?.message || err);
@@ -677,7 +705,9 @@ app.get("/api/stock", (_req, res) => {
   return res.json({
     success: true,
     stockData: getServerStockData(),
-    lastUpdated: serverLastUpdated
+    lastUpdated: serverLastUpdated,
+    lastTelegramScanId,
+    lastTelegramScanTime
   });
 });
 
@@ -909,7 +939,7 @@ ${note ? `📝 សំគាល់: ${note}\n` : ""}-----------------------------
     const formData = new FormData();
     formData.append("chat_id", chatId);
     formData.append("caption", `📄 ឯកសារទិន្នន័យស្តុក J&T (${timestamp}) #JT_STOCK_FILE`);
-    
+
     const fileBlob = new Blob([jsonString], { type: "application/json" });
     formData.append("document", fileBlob, `jt_stock_backup_${Date.now()}.json`);
 
@@ -1005,10 +1035,10 @@ app.post("/api/telegram/sync", async (req, res) => {
           if (msg.document) {
             const fileName = msg.document.file_name || "";
             const isJson = fileName.toLowerCase().endsWith(".json") ||
-                           msg.document.mime_type === "application/json" ||
-                           fileName.includes("stock") ||
-                           fileName.includes("backup") ||
-                           (msg.caption && (msg.caption.includes("#JT_STOCK_FILE") || msg.caption.includes("#JT_STOCK_DATA_V1")));
+              msg.document.mime_type === "application/json" ||
+              fileName.includes("stock") ||
+              fileName.includes("backup") ||
+              (msg.caption && (msg.caption.includes("#JT_STOCK_FILE") || msg.caption.includes("#JT_STOCK_DATA_V1")));
 
             if (isJson) {
               const fileId = msg.document.file_id;
