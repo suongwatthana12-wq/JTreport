@@ -409,10 +409,31 @@ export default function DailyReportApp() {
   const [scanInput, setScanInput] = useState("scan:5677714|0966997172");
   const [isExecutingScan, setIsExecutingScan] = useState(false);
   const lastServerUpdateRef = useRef<number>(0);
+  const lastScannedVersionRef = useRef<number>(0);
+
+  // List of all scanned tracking items fetched from /api/scanned-items
+  const [scannedItems, setScannedItems] = useState<Array<{
+    day: number;
+    rowIndex: number;
+    tracking: string;
+    receiverPhone: string;
+    senderPhone: string;
+    today: string;
+    prevday: string;
+    ret: string;
+    reloc: string;
+    sent: string;
+    cod: string;
+    cc: string;
+    issue: string;
+  }>>([]);
 
   const [toastMessage, setToastMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
-  const [activeDay, setActiveDay] = useState(1);
+  const [activeDay, setActiveDay] = useState(() => {
+    const today = new Date().getDate();
+    return Math.min(Math.max(today, 1), DAY_COUNT);
+  });
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showOverview, setShowOverview] = useState(false);
@@ -477,6 +498,29 @@ export default function DailyReportApp() {
 
     return () => clearInterval(interval);
   }, [showToast, syncDataToServer]);
+
+  // Dedicated polling loop for /api/scanned-items every 2s
+  // Runs independently from the /api/stock poll above so Telegram scan updates
+  // appear immediately in the scannedItems list without triggering a full data merge.
+  useEffect(() => {
+    const fetchScannedItems = () => {
+      fetch("/api/scanned-items")
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.success && typeof result.version === "number" && result.version > lastScannedVersionRef.current) {
+            lastScannedVersionRef.current = result.version;
+            setScannedItems(result.items || []);
+          }
+        })
+        .catch(() => {});
+    };
+
+    // Fetch immediately on mount
+    fetchScannedItems();
+
+    const scannedInterval = setInterval(fetchScannedItems, 2000);
+    return () => clearInterval(scannedInterval);
+  }, []);
 
   // Auto-save data to LocalStorage and push to server
   useEffect(() => {
