@@ -1446,24 +1446,24 @@ export default function DailyReportApp() {
                 <span className="font-extrabold text-blue-600 text-base">{monthlyStats.totalArrived}</span>
               </div>
               <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
-                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃនេះ (900៛)</span>
-                <span className="font-extrabold text-emerald-600 text-base">{monthlyStats.totalToday}</span>
-              </div>
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
-                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃមុន (800៛)</span>
-                <span className="font-extrabold text-cyan-600 text-base">{monthlyStats.totalPrevDay}</span>
-              </div>
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
-                <span className="text-[10px] text-slate-500 font-medium block">ផ្ញើចេញ (1,000៛)</span>
-                <span className="font-extrabold text-purple-600 text-base">{monthlyStats.totalSent}</span>
-              </div>
-              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
                 <span className="text-[10px] text-slate-500 font-medium block">ត្រឡប់ (Return)</span>
                 <span className="font-extrabold text-red-600 text-base">{monthlyStats.totalRet}</span>
               </div>
               <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
                 <span className="text-[10px] text-slate-500 font-medium block">ប្តូរទីតាំង</span>
                 <span className="font-extrabold text-amber-600 text-base">{monthlyStats.totalReloc}</span>
+              </div>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ផ្ញើចេញ (1,000៛)</span>
+                <span className="font-extrabold text-purple-600 text-base">{monthlyStats.totalSent}</span>
+              </div>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃមុន (800៛)</span>
+                <span className="font-extrabold text-cyan-600 text-base">{monthlyStats.totalPrevDay}</span>
+              </div>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
+                <span className="text-[10px] text-slate-500 font-medium block">ថ្ងៃនេះ (900៛)</span>
+                <span className="font-extrabold text-emerald-600 text-base">{monthlyStats.totalToday}</span>
               </div>
               <div className="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-xs text-center">
                 <span className="text-[10px] text-slate-500 font-medium block">សរុបប្រគល់</span>
@@ -1612,14 +1612,6 @@ export default function DailyReportApp() {
               {/* Metric Quick Summary Badges */}
               <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2 text-center text-xs">
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-slate-500 font-medium block mb-0.5">ថ្ងៃនេះ</span>
-                  <span className="font-bold text-emerald-600 text-base">{activeDayStats.todayCount}</span>
-                </div>
-                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-slate-500 font-medium block mb-0.5">ថ្ងៃមុន</span>
-                  <span className="font-bold text-cyan-600 text-base">{activeDayStats.prevdayCount}</span>
-                </div>
-                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">ត្រឡប់</span>
                   <span className="font-bold text-red-600 text-base">{activeDayStats.retCount}</span>
                 </div>
@@ -1630,6 +1622,14 @@ export default function DailyReportApp() {
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">ផ្ញើចេញ</span>
                   <span className="font-bold text-purple-600 text-base">{activeDayStats.sentCount}</span>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
+                  <span className="text-slate-500 font-medium block mb-0.5">ថ្ងៃមុន</span>
+                  <span className="font-bold text-cyan-600 text-base">{activeDayStats.prevdayCount}</span>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
+                  <span className="text-slate-500 font-medium block mb-0.5">ថ្ងៃនេះ</span>
+                  <span className="font-bold text-emerald-600 text-base">{activeDayStats.todayCount}</span>
                 </div>
                 <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-300 shadow-sm">
                   <span className="text-sky-800 block mb-0.5 font-bold">ចាំចែកចាយ</span>
@@ -1642,12 +1642,12 @@ export default function DailyReportApp() {
                   </span>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-slate-500 font-medium block mb-0.5">COD KHR</span>
-                  <span className="font-bold text-amber-700 text-xs sm:text-sm">{activeDayStats.codTotal.toLocaleString()}</span>
-                </div>
-                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">CC Cash</span>
                   <span className="font-bold text-teal-700 text-xs sm:text-sm">{activeDayStats.ccTotal.toLocaleString()}</span>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
+                  <span className="text-slate-500 font-medium block mb-0.5">COD KHR</span>
+                  <span className="font-bold text-amber-700 text-xs sm:text-sm">{activeDayStats.codTotal.toLocaleString()}</span>
                 </div>
                 <div className="bg-indigo-50 p-2.5 rounded-xl border border-indigo-200 shadow-sm">
                   <span className="text-indigo-900 font-bold block mb-0.5">សរុប CC+COD</span>
