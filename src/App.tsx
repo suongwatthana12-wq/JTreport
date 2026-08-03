@@ -35,7 +35,7 @@ const STORAGE_KEY = "jt-daily-report-v1";
 const TELEGRAM_TOKEN_KEY = "jt-telegram-token";
 const TELEGRAM_CHAT_KEY = "jt-telegram-chatid";
 
-const DEFAULT_BOT_TOKEN = "7960736598:AAG9VNlHrjS3gOy-QrRlS4FTQB2anDMBaak";
+const DEFAULT_BOT_TOKEN = "";
 const DEFAULT_CHAT_ID = "@my_stock_db_2026";
 
 const COLUMNS = [
@@ -2094,7 +2094,7 @@ export default function DailyReportApp() {
                   type="text"
                   value={botToken}
                   onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="7960736598:AAG..."
+                  placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono text-xs focus:outline-none focus:border-sky-500 focus:bg-white"
                 />
               </div>
