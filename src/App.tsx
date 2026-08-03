@@ -866,9 +866,39 @@ export default function DailyReportApp() {
       if (dayData && dayData.rows) {
         dayData.rows.forEach((r, idx) => {
           const hasInfo = Boolean(r.tracking || r.receiverPhone);
-          const isDeliveredOrDispatched = Boolean(r.today || r.prevday || r.ret || r.reloc || r.sent);
+          const isCheckedSelf = parseVal(r.today) > 0 || parseVal(r.prevday) > 0 || parseVal(r.ret) > 0 || parseVal(r.reloc) > 0 || parseVal(r.sent) > 0;
 
-          if (hasInfo && !isDeliveredOrDispatched) {
+          // Check if this parcel was marked delivered/dispatched on any day from arrivalDay to activeDay
+          const trackingClean = r.tracking.trim().toLowerCase();
+          const phoneClean = r.receiverPhone.trim().toLowerCase();
+
+          let isCheckedElsewhere = false;
+          if (trackingClean || phoneClean) {
+            for (let d = arrivalDay; d <= activeDay; d++) {
+              const checkDayData = data[d];
+              if (checkDayData && checkDayData.rows) {
+                for (const checkRow of checkDayData.rows) {
+                  const checkTracking = checkRow.tracking.trim().toLowerCase();
+                  const checkPhone = checkRow.receiverPhone.trim().toLowerCase();
+                  const isChecked = parseVal(checkRow.today) > 0 || parseVal(checkRow.prevday) > 0 || parseVal(checkRow.ret) > 0 || parseVal(checkRow.reloc) > 0 || parseVal(checkRow.sent) > 0;
+
+                  if (isChecked) {
+                    if (trackingClean && checkTracking === trackingClean) {
+                      isCheckedElsewhere = true;
+                      break;
+                    }
+                    if (phoneClean && checkPhone === phoneClean) {
+                      isCheckedElsewhere = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              if (isCheckedElsewhere) break;
+            }
+          }
+
+          if (hasInfo && !isCheckedSelf && !isCheckedElsewhere) {
             result.push({
               day: arrivalDay,
               rowIndex: idx,
