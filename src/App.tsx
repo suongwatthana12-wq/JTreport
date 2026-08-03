@@ -679,7 +679,7 @@ export default function DailyReportApp() {
         if (parseVal(r.reloc)) relocCount += parseVal(r.reloc);
       });
 
-      const dayRemaining = arrived + startLeftover - (todayCount + prevdayCount + retCount + relocCount);
+      const dayRemaining = (arrived - todayCount - relocCount) + (startLeftover - prevdayCount);
       remainings[d] = dayRemaining;
       prevDayLeft = dayRemaining;
     }
@@ -711,7 +711,9 @@ export default function DailyReportApp() {
     });
 
     const totalOut = todayCount + prevdayCount + retCount + relocCount + sentCount;
-    const remaining = arrived + prevLeftover - (todayCount + prevdayCount + retCount + relocCount);
+    const pendingDistribution = arrived - todayCount - relocCount;
+    const todayLeftover = prevLeftover - prevdayCount;
+    const remaining = pendingDistribution + todayLeftover;
     const dividend = (todayCount * 900) + (prevdayCount * 800) + (sentCount * 1000);
 
     return {
@@ -723,6 +725,8 @@ export default function DailyReportApp() {
       relocCount,
       sentCount,
       totalOut,
+      pendingDistribution,
+      todayLeftover,
       remaining,
       codTotal,
       ccTotal,
@@ -1048,15 +1052,17 @@ export default function DailyReportApp() {
     const text = `📋 របាយការណ៍ប្រចាំថ្ងៃ - ថ្ងៃទី ${activeDay}
 ----------------------------------
 ទំនិញមកដល់: ${activeDayStats.arrived}
-នៅសល់ខែចាស់: ${activeDayStats.prevLeftover}
+សល់ម្សិលមិញ: ${activeDayStats.prevLeftover}
 ប្រគល់ថ្ងៃនេះ (Today): ${activeDayStats.todayCount}
 ប្រគល់ថ្ងៃមុន (PrevDay): ${activeDayStats.prevdayCount}
 ត្រឡប់ (Return): ${activeDayStats.retCount}
 ប្តូរទីតាំង (Relocate): ${activeDayStats.relocCount}
 ផ្ញើចេញ (Sent): ${activeDayStats.sentCount}
 ----------------------------------
+ចាំចែកចាយ: ${activeDayStats.pendingDistribution}
+សល់ថ្ងៃនេះ: ${activeDayStats.todayLeftover}
 សរុបប្រគល់ចេញ: ${activeDayStats.totalOut}
-នៅសល់ចុងក្រោយ: ${activeDayStats.remaining}
+សល់សរុប: ${activeDayStats.remaining}
 ----------------------------------
 សរុប COD: ${activeDayStats.codTotal.toLocaleString()} KHR
 សរុប CC Cash: ${activeDayStats.ccTotal.toLocaleString()} KHR`;
@@ -1610,7 +1616,7 @@ export default function DailyReportApp() {
               </div>
 
               {/* Metric Quick Summary Badges */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2 text-center text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-11 gap-2 text-center text-xs">
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">ត្រឡប់</span>
                   <span className="font-bold text-red-600 text-base">{activeDayStats.retCount}</span>
@@ -1633,10 +1639,14 @@ export default function DailyReportApp() {
                 </div>
                 <div className="bg-sky-50 p-2.5 rounded-xl border border-sky-300 shadow-sm">
                   <span className="text-sky-800 block mb-0.5 font-bold">ចាំចែកចាយ</span>
-                  <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.arrived - activeDayStats.todayCount}</span>
+                  <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.pendingDistribution}</span>
+                </div>
+                <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-300 shadow-sm">
+                  <span className="text-amber-800 block mb-0.5 font-bold">សល់ថ្ងៃនេះ</span>
+                  <span className="font-black text-amber-700 text-xs sm:text-sm">{activeDayStats.todayLeftover}</span>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
-                  <span className="text-slate-500 font-medium block mb-0.5">នៅសល់</span>
+                  <span className="text-slate-500 font-medium block mb-0.5">សល់សរុប</span>
                   <span className={`font-bold text-base ${activeDayStats.remaining < 0 ? "text-red-600" : "text-slate-800"}`}>
                     {activeDayStats.remaining}
                   </span>
