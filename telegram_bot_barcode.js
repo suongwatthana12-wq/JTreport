@@ -6,7 +6,7 @@
  *    npm install node-telegram-bot-api @zxing/library jimp axios dotenv
  * 
  * 2. បង្កើតឯកសារ .env៖
- *    TELEGRAM_BOT_TOKEN=7960736598:AAG9VNlHrjS3gOy-QrRlS4FTQB2anDMBaak
+ *    TELEGRAM_BOT_TOKEN=your_bot_token_here
  *    WEBAPP_API_URL=https://your-domain.com/api/stock
  * 
  * 3. ដំណើរការ Script:
@@ -22,8 +22,13 @@ const axios = require('axios');
 require('dotenv').config();
 
 // 1. កំណត់ Telegram Bot Token និង Web App API Endpoint
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7960736598:AAG9VNlHrjS3gOy-QrRlS4FTQB2anDMBaak';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const WEBAPP_API_URL = process.env.WEBAPP_API_URL || 'https://your-app-domain.com/api/telegram/scan';
+
+if (!TELEGRAM_BOT_TOKEN) {
+  console.error('❌ TELEGRAM_BOT_TOKEN មិនត្រូវបានកំណត់ទេ! សូមកំណត់វាក្នុងឯកសារ .env (local) ឬ Environment Variables (Render/host) ។');
+  process.exit(1);
+}
 
 // បង្កើត Bot Instance (Polling Mode)
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
