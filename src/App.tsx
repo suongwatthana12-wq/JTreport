@@ -1178,31 +1178,163 @@ export default function DailyReportApp() {
     if (e.target) e.target.value = "";
   };
 
-  // --- Camera-based Barcode/QR Scan (directly from the phone/browser) ---
-  // Reuses the exact same /api/telegram/scan-image endpoint that the
-  // Telegram Bot and JTreport Mobile (APK) use, so results are 100% consistent.
+function playScanBeep() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.18);
+  } catch (e) {
+    // ignore audio restrictions
+  }
+}
+
+  // --- Standalone Direct Scanner State (No Telegram Bot required) ---
   const cameraFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isCameraScanModalOpen, setIsCameraScanModalOpen] = useState(false);
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [scannerMode, setScannerMode] = useState<"live" | "upload" | "manual">("live");
+  const [cameraFacingMode, setCameraFacingMode] = useState<"environment" | "user">("environment");
+  const [isLiveScanning, setIsLiveScanning] = useState(false);
+  const [scanCooldown, setScanCooldown] = useState(false);
+
   const [cameraScanStatus, setCameraScanStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [cameraScanPreview, setCameraScanPreview] = useState<string | null>(null);
   const [cameraScanResult, setCameraScanResult] = useState<{ tracking: string; phone: string | null } | null>(null);
   const [cameraScanError, setCameraScanError] = useState<string | null>(null);
+  const [scannedResultHistory, setScannedResultHistory] = useState<Array<{ tracking: string; phone?: string; time: string }>>([]);
 
-  const resetCameraScan = () => {
+  // Manual / Barcode Gun Input States
+  const [manualTracking, setManualTracking] = useState("");
+  const [manualPhone, setManualPhone] = useState("");
+  const [manualDay, setManualDay] = useState("");
+  const manualInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Live Camera Refs
+  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
+  const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveStreamRef = useRef<MediaStream | null>(null);
+  const liveIntervalRef = useRef<any>(null);
+
+  const stopLiveCamera = useCallback(() => {
+    if (liveIntervalRef.current) {
+      clearInterval(liveIntervalRef.current);
+      liveIntervalRef.current = null;
+    }
+    if (liveStreamRef.current) {
+      liveStreamRef.current.getTracks().forEach((track) => track.stop());
+      liveStreamRef.current = null;
+    }
+    setIsLiveScanning(false);
+  }, []);
+
+  const startLiveCamera = useCallback(async (facing: "environment" | "user" = cameraFacingMode) => {
+    stopLiveCamera();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      liveStreamRef.current = stream;
+      if (liveVideoRef.current) {
+        liveVideoRef.current.srcObject = stream;
+        await liveVideoRef.current.play();
+      }
+      setIsLiveScanning(true);
+    } catch (err: any) {
+      console.error("Camera access error:", err);
+      showToast("មិនអាចបើកកាមេរ៉ាបានទេ: " + (err.message || "សូមពិនិត្យមើលសិទ្ធិ Permissions"), "error");
+      setIsLiveScanning(false);
+    }
+  }, [cameraFacingMode, stopLiveCamera, showToast]);
+
+  const toggleCameraFacing = () => {
+    const nextFacing = cameraFacingMode === "environment" ? "user" : "environment";
+    setCameraFacingMode(nextFacing);
+    startLiveCamera(nextFacing);
+  };
+
+  const openScannerModal = (mode: "live" | "upload" | "manual" = "live") => {
     setCameraScanStatus("idle");
-    setCameraScanPreview(null);
-    setCameraScanResult(null);
     setCameraScanError(null);
+    setCameraScanResult(null);
+    setCameraScanPreview(null);
+    setScannerMode(mode);
+    setIsScannerModalOpen(true);
+    if (mode === "live") {
+      setTimeout(() => startLiveCamera(), 150);
+    }
   };
 
-  const openCameraScanModal = () => {
-    resetCameraScan();
-    setIsCameraScanModalOpen(true);
+  const closeScannerModal = () => {
+    stopLiveCamera();
+    setIsScannerModalOpen(false);
   };
 
+  // Live Camera Scan Frame Processor
+  useEffect(() => {
+    if (!isScannerModalOpen || scannerMode !== "live" || !isLiveScanning) {
+      return;
+    }
+
+    const processFrame = async () => {
+      if (scanCooldown) return;
+      const video = liveVideoRef.current;
+      if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+      const canvas = liveCanvasRef.current || document.createElement("canvas");
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+
+      try {
+        const res = await fetch("/api/scan-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: dataUrl, day: activeDay.toString() }),
+        });
+        const result = await res.json();
+        if (result.success && result.scannedData) {
+          playScanBeep();
+          setScanCooldown(true);
+          const scannedItem = {
+            tracking: result.scannedData,
+            phone: result.receiverPhone || undefined,
+            time: new Date().toLocaleTimeString()
+          };
+          setScannedResultHistory((prev) => [scannedItem, ...prev]);
+          showToast(`✅ ស្កែនជោគជ័យ! លេខបៀល៖ ${result.scannedData}`, "success");
+          if (result.targetDay) setActiveDay(parseInt(result.targetDay));
+          if (result.rowIndex !== undefined) setHighlightedRow(result.rowIndex);
+
+          setTimeout(() => setScanCooldown(false), 2000);
+        }
+      } catch (e) {
+        // frame decode retry
+      }
+    };
+
+    liveIntervalRef.current = setInterval(processFrame, 500);
+    return () => {
+      if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+    };
+  }, [isScannerModalOpen, scannerMode, isLiveScanning, scanCooldown, activeDay, showToast]);
+
+  // Handle Image File Upload Scan
   const handleCameraFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (e.target) e.target.value = ""; // allow re-selecting the same file next time
+    if (e.target) e.target.value = "";
     if (!file) return;
 
     const reader = new FileReader();
@@ -1214,26 +1346,23 @@ export default function DailyReportApp() {
       setCameraScanResult(null);
 
       try {
-        const res = await fetch("/api/telegram/scan-image", {
+        const res = await fetch("/api/scan-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64: dataUrl }),
+          body: JSON.stringify({ imageBase64: dataUrl, day: activeDay.toString() }),
         });
         const result = await res.json();
         if (result.success) {
+          playScanBeep();
           setCameraScanStatus("success");
           setCameraScanResult({ tracking: result.scannedData || "", phone: result.receiverPhone || null });
           showToast(result.message || "ស្កែនជោគជ័យ!", "success");
-          // Pull the fresh row in immediately instead of waiting for the next poll.
-          fetch("/api/stock")
-            .then((r) => r.json())
-            .then((r) => {
-              if (r.success && r.stockData) {
-                setData(mergeWithDefaults(r.stockData));
-                if (r.lastUpdated) lastServerUpdateRef.current = r.lastUpdated;
-              }
-            })
-            .catch(() => {});
+          setScannedResultHistory((prev) => [
+            { tracking: result.scannedData, phone: result.receiverPhone || undefined, time: new Date().toLocaleTimeString() },
+            ...prev
+          ]);
+          if (result.targetDay) setActiveDay(parseInt(result.targetDay));
+          if (result.rowIndex !== undefined) setHighlightedRow(result.rowIndex);
         } else {
           setCameraScanStatus("error");
           setCameraScanError(result.message || "រកមិនឃើញ Barcode/QR ទេ");
@@ -1244,6 +1373,46 @@ export default function DailyReportApp() {
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  // Handle Manual Input & Hardware Barcode Gun Submit
+  const handleManualScanSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const raw = manualTracking.trim();
+    if (!raw) {
+      showToast("សូមបញ្ចូលលេខបៀល (Tracking Number)", "error");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tracking: raw,
+          phone: manualPhone.trim() || undefined,
+          day: manualDay || activeDay.toString()
+        })
+      });
+      const result = await res.json();
+      if (result.success) {
+        playScanBeep();
+        showToast(result.message || `ស្កែនជោគជ័យ: ${raw}`, "success");
+        setScannedResultHistory((prev) => [
+          { tracking: raw, phone: manualPhone.trim() || undefined, time: new Date().toLocaleTimeString() },
+          ...prev
+        ]);
+        if (result.targetDay) setActiveDay(parseInt(result.targetDay));
+        if (result.rowIndex !== undefined) setHighlightedRow(result.rowIndex);
+        setManualTracking("");
+        setManualPhone("");
+        setTimeout(() => manualInputRef.current?.focus(), 100);
+      } else {
+        showToast(`ស្កែនបរាជ័យ: ${result.error}`, "error");
+      }
+    } catch (err: any) {
+      showToast(`កំហុសបណ្តាញ: ${err.message}`, "error");
+    }
   };
 
 
@@ -1397,22 +1566,21 @@ export default function DailyReportApp() {
 
 
 
-            {/* Camera Scan — works on phone browsers, same backend as APK/Telegram */}
+            {/* Standalone Direct Scanner Button (No Telegram Bot dependency) */}
             <input
               ref={cameraFileInputRef}
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={handleCameraFileSelected}
             />
             <button
-              onClick={openCameraScanModal}
-              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
-              title="ស្កែនតាមកាមេរ៉ា (Camera Scan)"
+              onClick={() => openScannerModal("live")}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white text-xs sm:text-sm font-bold rounded-xl transition shadow-md shadow-red-200 active:scale-95"
+              title="ស្កែន Barcode/QR ដោយមិនប្រើ Telegram Bot"
             >
-              <Camera className="w-4 h-4" />
-              <span className="hidden xs:inline">ស្កែនកាមេរ៉ា</span>
+              <Camera className="w-4 h-4 animate-pulse" />
+              <span>📷 ស្កែន (Direct Scanner)</span>
             </button>
 
             {/* Import JSON */}
@@ -2557,103 +2725,323 @@ export default function DailyReportApp() {
 
       {/* Mobile-only Floating Scan Button — thumb-friendly quick access on phones */}
       <button
-        onClick={openCameraScanModal}
-        className="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/30 flex items-center justify-center active:scale-95 transition"
+        onClick={() => openScannerModal("live")}
+        className="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full bg-gradient-to-tr from-red-600 to-rose-500 hover:from-red-700 hover:to-rose-600 text-white shadow-xl shadow-red-600/40 flex items-center justify-center active:scale-95 transition"
         title="ស្កែនតាមកាមេរ៉ា"
       >
         <Camera className="w-6 h-6" />
       </button>
 
-      {/* Camera Scan Modal */}
-      {isCameraScanModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+      {/* Standalone Direct Scanner Modal (No Telegram dependency) */}
+      {isScannerModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white shrink-0">
               <div className="flex items-center space-x-2.5">
-                <Camera className="w-5 h-5 text-emerald-600" />
-                <h3 className="text-base font-bold text-slate-900">ស្កែនតាមកាមេរ៉ា (Camera Scan)</h3>
+                <div className="p-2 bg-red-600 rounded-xl text-white">
+                  <Camera className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-wide">ស្កែន Barcode / QR (Direct Scanner)</h3>
+                  <p className="text-[11px] text-slate-300">ស្កែនដោយផ្ទាល់ មិនប្រើ Telegram Bot ឡើយ</p>
+                </div>
               </div>
               <button
-                onClick={() => setIsCameraScanModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition"
+                onClick={closeScannerModal}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Mode Switcher Tabs */}
+            <div className="grid grid-cols-3 bg-slate-100 p-1.5 border-b border-slate-200 shrink-0 gap-1">
+              <button
+                onClick={() => {
+                  setScannerMode("live");
+                  setTimeout(() => startLiveCamera(), 150);
+                }}
+                className={`py-2 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1 ${
+                  scannerMode === "live"
+                    ? "bg-white text-red-600 shadow-sm border border-slate-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span> Live កាមេរ៉ា</span>
+              </button>
+              <button
+                onClick={() => {
+                  stopLiveCamera();
+                  setScannerMode("upload");
+                }}
+                className={`py-2 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1 ${
+                  scannerMode === "upload"
+                    ? "bg-white text-red-600 shadow-sm border border-slate-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span> ផ្ទុកឡើងរូបភាព</span>
+              </button>
+              <button
+                onClick={() => {
+                  stopLiveCamera();
+                  setScannerMode("manual");
+                  setTimeout(() => manualInputRef.current?.focus(), 150);
+                }}
+                className={`py-2 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1 ${
+                  scannerMode === "manual"
+                    ? "bg-white text-red-600 shadow-sm border border-slate-200"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span> ស្កែនដៃ / កាំភ្លើង</span>
+              </button>
+            </div>
+
+            {/* Modal Body Content */}
             <div className="p-4 sm:p-5 space-y-4 text-xs sm:text-sm overflow-y-auto flex-1">
-              {cameraScanStatus === "idle" && (
-                <div className="flex flex-col items-center text-center py-6 space-y-4">
-                  <div className="w-24 h-24 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-                    <Camera className="w-10 h-10 text-slate-400" />
+              
+              {/* TAB 1: LIVE WEBCAM CAMERA */}
+              {scannerMode === "live" && (
+                <div className="space-y-3">
+                  <div className="relative bg-black rounded-2xl overflow-hidden aspect-video flex items-center justify-center border-2 border-slate-800 shadow-inner">
+                    <video
+                      ref={liveVideoRef}
+                      className="w-full h-full object-cover"
+                      playsInline
+                      muted
+                    />
+                    <canvas ref={liveCanvasRef} className="hidden" />
+
+                    {/* Target Barcode Box Overlay */}
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div className="w-64 h-32 border-2 border-red-500/80 rounded-2xl relative shadow-[0_0_15px_rgba(239,68,68,0.5)]">
+                        <div className="absolute inset-x-0 top-1/2 h-0.5 bg-red-500 shadow-[0_0_10px_#ef4444] animate-pulse" />
+                        <div className="absolute top-2 left-2 text-[10px] bg-red-600/80 text-white px-1.5 py-0.5 rounded font-mono font-bold">
+                          តម្រង់ Barcode ទីនេះ
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Camera Control Overlay Top */}
+                    <div className="absolute top-3 right-3 flex items-center space-x-2">
+                      <button
+                        onClick={toggleCameraFacing}
+                        className="px-2.5 py-1 bg-slate-900/80 hover:bg-slate-900 text-white rounded-lg text-[11px] font-semibold border border-slate-700 backdrop-blur-sm transition flex items-center space-x-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>{cameraFacingMode === "environment" ? "កាមេរ៉ាក្រោយ" : "កាមេរ៉ាមុខ"}</span>
+                      </button>
+                    </div>
+
+                    {!isLiveScanning && (
+                      <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center text-white space-y-2 p-4 text-center">
+                        <Camera className="w-8 h-8 text-red-500" />
+                        <p className="text-xs">កាមេរ៉ាមិនទាន់បើក ឬកំពុងសុំសិទ្ធិ Permissions...</p>
+                        <button
+                          onClick={() => startLiveCamera()}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl"
+                        >
+                          បើកកាមេរ៉ាឡើងវិញ
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-slate-500 leading-relaxed">
-                    ថតរូប Waybill Label ដើម្បីស្កែន Barcode/QR និងលេខទូរស័ព្ទ
-                    <br />
-                    <span className="text-[11px]">ប្រព័ន្ធស្កែនដូចគ្នានឹង Telegram Bot / App</span>
-                  </p>
-                  <div className="flex gap-2 w-full">
+
+                  {/* Status Indicator */}
+                  <div className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                    <div className="flex items-center space-x-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${scanCooldown ? "bg-amber-500 animate-ping" : "bg-emerald-500 animate-pulse"}`} />
+                      <span className="font-semibold text-slate-700">
+                        {scanCooldown ? "⏳ បានស្កែនរួចរាល់! ផ្អាក ២ វិនាទី..." : "🟢 កំពុងស្កែន Real-time..."}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-mono">ថ្ងៃទី {activeDay}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: UPLOAD IMAGE / GALLERY */}
+              {scannerMode === "upload" && (
+                <div className="space-y-4">
+                  {cameraScanStatus === "idle" && (
+                    <div className="flex flex-col items-center text-center py-6 space-y-4 border-2 border-dashed border-slate-300 rounded-2xl bg-slate-50 hover:bg-slate-100/80 transition cursor-pointer" onClick={() => cameraFileInputRef.current?.click()}>
+                      <div className="w-16 h-16 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 shadow-sm">
+                        <ImageIcon className="w-8 h-8" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-slate-800">ជ្រើសរើសរូបភាព ឬថតរូបស្លាកបៀល (Waybill)</p>
+                        <p className="text-[11px] text-slate-500">ប្រព័ន្ធនឹងស្កែន Barcode និងទាញយកលេខទូរស័ព្ទដោយស្វ័យប្រវត្តិ</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs shadow-sm"
+                      >
+                        ជ្រើសរើសរូបភាព (Choose File)
+                      </button>
+                    </div>
+                  )}
+
+                  {cameraScanStatus === "sending" && (
+                    <div className="flex flex-col items-center text-center py-6 space-y-4">
+                      {cameraScanPreview && (
+                        <img src={cameraScanPreview} alt="preview" className="w-full max-h-48 object-cover rounded-xl border border-slate-200 shadow-sm" />
+                      )}
+                      <div className="flex items-center space-x-2 text-slate-700 font-semibold">
+                        <Loader2 className="w-5 h-5 animate-spin text-red-600" />
+                        <span>កំពុងស្កែន Barcode & លេខទូរស័ព្ទ...</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {cameraScanStatus === "success" && cameraScanResult && (
+                    <div className="flex flex-col items-center text-center py-3 space-y-3">
+                      <CheckCircle2 className="w-12 h-12 text-emerald-600" />
+                      <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-1.5 text-left">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] text-slate-500 font-semibold">លេខបៀល (Tracking Number)</span>
+                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100 px-2 py-0.5 rounded">បានបញ្ចូលថ្ងៃទី {activeDay}</span>
+                        </div>
+                        <div className="font-mono font-bold text-slate-900 text-base">{cameraScanResult.tracking || "-"}</div>
+                        {cameraScanResult.phone && (
+                          <div className="text-xs text-slate-700">
+                            📱 លេខអ្នកទទួល: <strong className="font-mono text-cyan-800">{cameraScanResult.phone}</strong>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => {
+                          setCameraScanStatus("idle");
+                          setCameraScanPreview(null);
+                        }}
+                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs"
+                      >
+                        ស្កែនរូបភាពផ្សេងទៀត
+                      </button>
+                    </div>
+                  )}
+
+                  {cameraScanStatus === "error" && (
+                    <div className="flex flex-col items-center text-center py-4 space-y-3">
+                      <XCircle className="w-12 h-12 text-red-600" />
+                      <p className="text-xs font-semibold text-red-700">{cameraScanError || "មិនរកឃើញ Barcode/QR ទេ"}</p>
+                      <button
+                        onClick={() => {
+                          setCameraScanStatus("idle");
+                          setCameraScanPreview(null);
+                        }}
+                        className="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        ព្យាយាមម្តងទៀត
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 3: MANUAL QUICK SCAN & USB BARCODE GUN */}
+              {scannerMode === "manual" && (
+                <form onSubmit={handleManualScanSubmit} className="space-y-3.5">
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+                    <p className="font-bold flex items-center gap-1">
+                      <span>⚡ គាំទ្រកាំភ្លើងស្កែន (Barcode Scanner Gun)</span>
+                    </p>
+                    <p className="text-[11px] text-amber-800">
+                      អ្នកអាចប្រើប្រាស់កាំភ្លើងស្កែន USB/Bluetooth ស្កែនផ្ទាល់ចូលទៅក្នុងប្រអប់ "លេខបៀល"។ ប្រព័ន្ធនឹងបញ្ចូលទិន្នន័យភ្លាមៗពេលចុច Enter!
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-700 block">លេខបៀល (Tracking Number) *</label>
+                    <input
+                      ref={manualInputRef}
+                      type="text"
+                      value={manualTracking}
+                      onChange={(e) => setManualTracking(e.target.value)}
+                      placeholder="ឧទាហរណ៍: 5677714"
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 font-mono font-bold text-sm text-slate-900 focus:outline-none focus:border-red-500 focus:bg-white"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700 block">លេខអ្នកទទួល (Phone Number)</label>
+                      <input
+                        type="text"
+                        value={manualPhone}
+                        onChange={(e) => setManualPhone(e.target.value)}
+                        placeholder="0966997172"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 font-mono text-xs text-slate-900 focus:outline-none focus:border-red-500 focus:bg-white"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-700 block">បញ្ចូលក្នុងថ្ងៃទី (Day)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        value={manualDay || activeDay}
+                        onChange={(e) => setManualDay(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:border-red-500 focus:bg-white text-center"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs shadow-md shadow-red-200 transition flex items-center justify-center space-x-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>បញ្ចូលទិន្នន័យ (Add Row)</span>
+                  </button>
+                </form>
+              )}
+
+              {/* Scanned History List */}
+              {scannedResultHistory.length > 0 && (
+                <div className="pt-2 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                    <span>📋 ប្រវត្តិស្កែនក្នុងវេននេះ ({scannedResultHistory.length})</span>
                     <button
-                      onClick={() => cameraFileInputRef.current?.click()}
-                      className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
+                      onClick={() => setScannedResultHistory([])}
+                      className="text-[10px] text-red-600 hover:underline font-normal"
                     >
-                      <Camera className="w-4 h-4" />
-                      <span>ថតរូប Label</span>
+                      សម្អាតប្រវត្តិ
                     </button>
                   </div>
-                </div>
-              )}
-
-              {cameraScanStatus === "sending" && (
-                <div className="flex flex-col items-center text-center py-6 space-y-4">
-                  {cameraScanPreview && (
-                    <img src={cameraScanPreview} alt="preview" className="w-full max-h-48 object-cover rounded-xl border border-slate-200" />
-                  )}
-                  <div className="flex items-center space-x-2 text-slate-600">
-                    <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-                    <span>កំពុងស្កែន...</span>
+                  <div className="max-h-36 overflow-y-auto space-y-1.5 scrollbar-thin">
+                    {scannedResultHistory.map((item, idx) => (
+                      <div key={idx} className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                        <div className="flex items-center space-x-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          <span className="font-mono font-bold text-slate-900">{item.tracking}</span>
+                          {item.phone && <span className="text-slate-500 text-[11px]">({item.phone})</span>}
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">{item.time}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
 
-              {cameraScanStatus === "success" && cameraScanResult && (
-                <div className="flex flex-col items-center text-center py-4 space-y-4">
-                  <CheckCircle2 className="w-14 h-14 text-emerald-600" />
-                  <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 space-y-2 text-left">
-                    <div>
-                      <div className="text-[10px] text-slate-500 font-semibold">លេខបៀល (Tracking)</div>
-                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.tracking || "-"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-slate-500 font-semibold">លេខអ្នកទទួល</div>
-                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.phone || "មិនរកឃើញ"}</div>
-                    </div>
-                  </div>
-                  <p className="text-emerald-700 font-semibold">✅ បានបញ្ចូលទៅ Web App ដោយស្វ័យប្រវត្តិ</p>
-                  <button
-                    onClick={resetCameraScan}
-                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    <span>ស្កែនបន្ត</span>
-                  </button>
-                </div>
-              )}
-
-              {cameraScanStatus === "error" && (
-                <div className="flex flex-col items-center text-center py-4 space-y-4">
-                  <XCircle className="w-14 h-14 text-red-600" />
-                  <p className="text-red-700">{cameraScanError || "មានបញ្ហា"}</p>
-                  <button
-                    onClick={resetCameraScan}
-                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>សាកល្បងម្តងទៀត</span>
-                  </button>
-                </div>
-              )}
             </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+              <button
+                onClick={closeScannerModal}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-xl text-xs transition"
+              >
+                បិទ (Close)
+              </button>
+            </div>
+
           </div>
         </div>
       )}
