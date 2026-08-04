@@ -26,7 +26,11 @@ import {
   AlertCircle,
   RefreshCw,
   ShieldCheck,
-  FileUp
+  FileUp,
+  Camera,
+  CheckCircle2,
+  XCircle,
+  Image as ImageIcon
 } from "lucide-react";
 
 const DAY_COUNT = 31;
@@ -1174,6 +1178,74 @@ export default function DailyReportApp() {
     if (e.target) e.target.value = "";
   };
 
+  // --- Camera-based Barcode/QR Scan (directly from the phone/browser) ---
+  // Reuses the exact same /api/telegram/scan-image endpoint that the
+  // Telegram Bot and JTreport Mobile (APK) use, so results are 100% consistent.
+  const cameraFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isCameraScanModalOpen, setIsCameraScanModalOpen] = useState(false);
+  const [cameraScanStatus, setCameraScanStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
+  const [cameraScanPreview, setCameraScanPreview] = useState<string | null>(null);
+  const [cameraScanResult, setCameraScanResult] = useState<{ tracking: string; phone: string | null } | null>(null);
+  const [cameraScanError, setCameraScanError] = useState<string | null>(null);
+
+  const resetCameraScan = () => {
+    setCameraScanStatus("idle");
+    setCameraScanPreview(null);
+    setCameraScanResult(null);
+    setCameraScanError(null);
+  };
+
+  const openCameraScanModal = () => {
+    resetCameraScan();
+    setIsCameraScanModalOpen(true);
+  };
+
+  const handleCameraFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = ""; // allow re-selecting the same file next time
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const dataUrl = evt.target?.result as string;
+      setCameraScanPreview(dataUrl);
+      setCameraScanStatus("sending");
+      setCameraScanError(null);
+      setCameraScanResult(null);
+
+      try {
+        const res = await fetch("/api/telegram/scan-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: dataUrl }),
+        });
+        const result = await res.json();
+        if (result.success) {
+          setCameraScanStatus("success");
+          setCameraScanResult({ tracking: result.scannedData || "", phone: result.receiverPhone || null });
+          showToast(result.message || "ស្កែនជោគជ័យ!", "success");
+          // Pull the fresh row in immediately instead of waiting for the next poll.
+          fetch("/api/stock")
+            .then((r) => r.json())
+            .then((r) => {
+              if (r.success && r.stockData) {
+                setData(mergeWithDefaults(r.stockData));
+                if (r.lastUpdated) lastServerUpdateRef.current = r.lastUpdated;
+              }
+            })
+            .catch(() => {});
+        } else {
+          setCameraScanStatus("error");
+          setCameraScanError(result.message || "រកមិនឃើញ Barcode/QR ទេ");
+        }
+      } catch (err: any) {
+        setCameraScanStatus("error");
+        setCameraScanError(`កំហុសបណ្តាញ: ${err.message}`);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
 
   // Import data FROM an Excel (.xlsx/.xls) file — expects the same column layout produced by
   // exportXLSX: ថ្ងៃទី, #, ត្រឡប់, បូរទីកាំង, ផ្ញើចេញ, ថ្ងៃមុន, ថ្ងៃនេះ, លេខបៀល, លេខអ្នកទទួល,
@@ -1324,6 +1396,24 @@ export default function DailyReportApp() {
             </button>
 
 
+
+            {/* Camera Scan — works on phone browsers, same backend as APK/Telegram */}
+            <input
+              ref={cameraFileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleCameraFileSelected}
+            />
+            <button
+              onClick={openCameraScanModal}
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
+              title="ស្កែនតាមកាមេរ៉ា (Camera Scan)"
+            >
+              <Camera className="w-4 h-4" />
+              <span className="hidden xs:inline">ស្កែនកាមេរ៉ា</span>
+            </button>
 
             {/* Import JSON */}
             <input
@@ -1784,8 +1874,8 @@ export default function DailyReportApp() {
               </div>
             )}
 
-            {/* Interactive Main Data Table */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+            {/* Interactive Main Data Table — Desktop / Tablet only */}
+            <div className="hidden md:flex bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-col">
               <div className="overflow-x-auto max-h-[620px] scrollbar-thin scrollbar-thumb-slate-300">
                 <table className="w-full text-xs text-left text-slate-800 border-collapse">
                   <thead className="bg-slate-100/95 text-slate-700 font-bold sticky top-0 z-10 border-b border-slate-200">
@@ -2008,6 +2098,192 @@ export default function DailyReportApp() {
 
                 <span className="text-xs text-slate-500 font-medium">
                   សរុបជួរដេកទាំងអស់: <strong className="text-slate-800 font-mono">{currentDayData.rows?.length || 0}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Mobile Card View — replaces the table with touch-friendly cards on phones */}
+            <div className="md:hidden space-y-2.5">
+              {(currentDayData.rows || []).map((row, idx) => {
+                const isHighlighted = highlightedRow === idx;
+                const refKey = `${activeDay}-${idx}`;
+                const trackingVal = row.tracking || "";
+                const phoneVal = row.receiverPhone || "";
+                const rowConfirmed = parseVal(row.today) === 1 || parseVal(row.prevday) === 1;
+                const phoneDupCount = phoneVal && !rowConfirmed ? (currentDayPhoneCounts[phoneVal.trim()] || 0) : 0;
+                const toggleCols = COLUMNS.filter((c) => TOGGLE_KEYS.includes(c.key));
+                const issueVal = row.issue || "";
+                const isCustomIssue = issueVal && !ISSUE_OPTIONS.includes(issueVal);
+
+                return (
+                  <div
+                    key={idx}
+                    ref={(el) => (rowRefs.current[refKey] = el)}
+                    className={`bg-white rounded-2xl border shadow-sm p-3.5 space-y-3 transition ${
+                      isHighlighted ? "border-red-500 border-2 bg-red-50" : "border-slate-200"
+                    }`}
+                  >
+                    {/* Card header: index, tracking, delete */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 shrink-0">
+                        #{idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        value={trackingVal}
+                        placeholder="លេខបៀល (Tracking)"
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const trimmed = raw.trim().toUpperCase();
+                          if (/^\d+$/.test(trimmed) && trimmed.length >= 7) {
+                            const formatted = formatTrackingNumber(trimmed, lastTrackingPrefix);
+                            handleCellChange(activeDay, idx, "tracking", formatted);
+                            const prefix = extractTrackingPrefix(formatted);
+                            if (prefix) setLastTrackingPrefix(prefix);
+                          } else {
+                            handleCellChange(activeDay, idx, "tracking", raw);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const formatted = formatTrackingNumber(e.target.value, lastTrackingPrefix);
+                          if (formatted !== e.target.value) {
+                            handleCellChange(activeDay, idx, "tracking", formatted);
+                          }
+                          const prefix = extractTrackingPrefix(formatted);
+                          if (prefix) setLastTrackingPrefix(prefix);
+                        }}
+                        className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono font-bold text-sm text-amber-800 focus:outline-none focus:border-red-500 focus:bg-white"
+                      />
+                      <button
+                        onClick={() => deleteRow(idx)}
+                        title="លុបជួរដេកនេះ"
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Receiver phone */}
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={phoneVal}
+                        placeholder="លេខអ្នកទទួល"
+                        onChange={(e) => handleCellChange(activeDay, idx, "receiverPhone", e.target.value)}
+                        className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono font-bold text-sm focus:outline-none focus:border-red-500 focus:bg-white ${
+                          phoneDupCount > 1 ? "text-red-600 pr-8" : "text-cyan-800"
+                        }`}
+                      />
+                      {phoneDupCount > 1 && (
+                        <span
+                          title={`លេខទូរស័ព្ទនេះលេចឡើង ${phoneDupCount} ដងក្នុងថ្ងៃនេះ`}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none pointer-events-none"
+                        >
+                          ×{phoneDupCount}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Status toggles */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {toggleCols.map((col) => {
+                        const isChecked = parseVal(row[col.key as keyof ReportRow]) === 1;
+                        return (
+                          <button
+                            key={col.key}
+                            type="button"
+                            onClick={() => handleCellChange(activeDay, idx, col.key as keyof ReportRow, isChecked ? "" : "1")}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition flex items-center gap-1 ${
+                              isChecked
+                                ? "bg-emerald-50 border-emerald-300 text-emerald-700"
+                                : "bg-slate-50 border-slate-200 text-slate-400"
+                            }`}
+                          >
+                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                            {col.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* CC / COD */}
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">CC-Cash</label>
+                        <input
+                          type="number"
+                          value={row.cc || ""}
+                          onChange={(e) => handleCellChange(activeDay, idx, "cc", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:border-red-500 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">COD KHR</label>
+                        <input
+                          type="number"
+                          value={row.cod || ""}
+                          onChange={(e) => handleCellChange(activeDay, idx, "cod", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm text-center focus:outline-none focus:border-red-500 focus:bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Issue dropdown */}
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">បញ្ហារ</label>
+                      <select
+                        value={issueVal}
+                        onChange={(e) => handleCellChange(activeDay, idx, "issue", e.target.value)}
+                        className={`w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:border-red-500 focus:bg-white ${
+                          issueVal ? "font-bold text-amber-800" : "text-slate-400"
+                        }`}
+                      >
+                        <option value=""></option>
+                        {ISSUE_OPTIONS.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                        {isCustomIssue && <option value={issueVal}>{issueVal}</option>}
+                      </select>
+                    </div>
+
+                    {/* Sender phone + Other — collapsed into a details row to save space */}
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">លេខអ្នកផ្ញើ</label>
+                        <input
+                          type="text"
+                          value={row.senderPhone || ""}
+                          onChange={(e) => handleCellChange(activeDay, idx, "senderPhone", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:border-red-500 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">ផ្សេងៗ</label>
+                        <input
+                          type="text"
+                          value={row.other || ""}
+                          onChange={(e) => handleCellChange(activeDay, idx, "other", e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-red-500 focus:bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Mobile Add Row + count footer */}
+              <div className="flex items-center justify-between pt-1 pb-2">
+                <button
+                  onClick={addRow}
+                  className="flex items-center space-x-1.5 px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-xl transition border border-slate-300 shadow-sm"
+                >
+                  <Plus className="w-4 h-4 text-red-600" />
+                  <span>បន្ថែមជួរដេក</span>
+                </button>
+                <span className="text-xs text-slate-500 font-medium">
+                  សរុប: <strong className="text-slate-800 font-mono">{currentDayData.rows?.length || 0}</strong>
                 </span>
               </div>
             </div>
@@ -2274,6 +2550,109 @@ export default function DailyReportApp() {
               >
                 បោះបង់ (Cancel)
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile-only Floating Scan Button — thumb-friendly quick access on phones */}
+      <button
+        onClick={openCameraScanModal}
+        className="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/30 flex items-center justify-center active:scale-95 transition"
+        title="ស្កែនតាមកាមេរ៉ា"
+      >
+        <Camera className="w-6 h-6" />
+      </button>
+
+      {/* Camera Scan Modal */}
+      {isCameraScanModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <Camera className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-bold text-slate-900">ស្កែនតាមកាមេរ៉ា (Camera Scan)</h3>
+              </div>
+              <button
+                onClick={() => setIsCameraScanModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 space-y-4 text-xs sm:text-sm overflow-y-auto flex-1">
+              {cameraScanStatus === "idle" && (
+                <div className="flex flex-col items-center text-center py-6 space-y-4">
+                  <div className="w-24 h-24 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
+                    <Camera className="w-10 h-10 text-slate-400" />
+                  </div>
+                  <p className="text-slate-500 leading-relaxed">
+                    ថតរូប Waybill Label ដើម្បីស្កែន Barcode/QR និងលេខទូរស័ព្ទ
+                    <br />
+                    <span className="text-[11px]">ប្រព័ន្ធស្កែនដូចគ្នានឹង Telegram Bot / App</span>
+                  </p>
+                  <div className="flex gap-2 w-full">
+                    <button
+                      onClick={() => cameraFileInputRef.current?.click()}
+                      className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>ថតរូប Label</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {cameraScanStatus === "sending" && (
+                <div className="flex flex-col items-center text-center py-6 space-y-4">
+                  {cameraScanPreview && (
+                    <img src={cameraScanPreview} alt="preview" className="w-full max-h-48 object-cover rounded-xl border border-slate-200" />
+                  )}
+                  <div className="flex items-center space-x-2 text-slate-600">
+                    <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                    <span>កំពុងស្កែន...</span>
+                  </div>
+                </div>
+              )}
+
+              {cameraScanStatus === "success" && cameraScanResult && (
+                <div className="flex flex-col items-center text-center py-4 space-y-4">
+                  <CheckCircle2 className="w-14 h-14 text-emerald-600" />
+                  <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 space-y-2 text-left">
+                    <div>
+                      <div className="text-[10px] text-slate-500 font-semibold">លេខបៀល (Tracking)</div>
+                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.tracking || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500 font-semibold">លេខអ្នកទទួល</div>
+                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.phone || "មិនរកឃើញ"}</div>
+                    </div>
+                  </div>
+                  <p className="text-emerald-700 font-semibold">✅ បានបញ្ចូលទៅ Web App ដោយស្វ័យប្រវត្តិ</p>
+                  <button
+                    onClick={resetCameraScan}
+                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>ស្កែនបន្ត</span>
+                  </button>
+                </div>
+              )}
+
+              {cameraScanStatus === "error" && (
+                <div className="flex flex-col items-center text-center py-4 space-y-4">
+                  <XCircle className="w-14 h-14 text-red-600" />
+                  <p className="text-red-700">{cameraScanError || "មានបញ្ហា"}</p>
+                  <button
+                    onClick={resetCameraScan}
+                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>សាកល្បងម្តងទៀត</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
