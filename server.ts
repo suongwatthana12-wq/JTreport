@@ -76,62 +76,6 @@ let lastTelegramUpdateId: number = 0;
 let lastTelegramScanTime: number = 0;
 let lastTelegramScanId: string = "";
 
-// Telegram Message & Scan Deduplication Cache (Prevents duplicate replies / processing within 30s)
-const DUP_EXPIRATION_MS = 30000;
-const processedMessageIds = new Map<string, number>();
-const processedFileIds = new Map<string, number>();
-const processedTrackings = new Map<string, number>();
-
-function isDuplicateMessage(chatId: string | number, messageId?: number): boolean {
-  if (!messageId) return false;
-  const key = `${chatId}_${messageId}`;
-  const now = Date.now();
-  const lastTime = processedMessageIds.get(key);
-  if (lastTime && now - lastTime < DUP_EXPIRATION_MS) {
-    return true;
-  }
-  processedMessageIds.set(key, now);
-  return false;
-}
-
-function isDuplicateFileId(fileId?: string): boolean {
-  if (!fileId) return false;
-  const now = Date.now();
-  const lastTime = processedFileIds.get(fileId);
-  if (lastTime && now - lastTime < DUP_EXPIRATION_MS) {
-    return true;
-  }
-  processedFileIds.set(fileId, now);
-  return false;
-}
-
-function isDuplicateTracking(tracking?: string): boolean {
-  if (!tracking) return false;
-  const clean = tracking.trim().toUpperCase();
-  if (!clean) return false;
-  const now = Date.now();
-  const lastTime = processedTrackings.get(clean);
-  if (lastTime && now - lastTime < DUP_EXPIRATION_MS) {
-    return true;
-  }
-  processedTrackings.set(clean, now);
-  return false;
-}
-
-// Periodic cleanup of expired cache entries (every 60 seconds)
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of processedMessageIds.entries()) {
-    if (now - v > DUP_EXPIRATION_MS * 2) processedMessageIds.delete(k);
-  }
-  for (const [k, v] of processedFileIds.entries()) {
-    if (now - v > DUP_EXPIRATION_MS * 2) processedFileIds.delete(k);
-  }
-  for (const [k, v] of processedTrackings.entries()) {
-    if (now - v > DUP_EXPIRATION_MS * 2) processedTrackings.delete(k);
-  }
-}, 60000);
-
 // Disk-persisted Telegram save cache — survives server restarts.
 // Stores the file_id of the last successfully saved stock document and the last Telegram update_id
 const TELEGRAM_CACHE_FILE = path.join(process.cwd(), ".telegram_cache.json");
@@ -490,24 +434,11 @@ function parseScanCommand(text: string) {
 }
 
 // Process scan command and update shared state
-async function processIncomingScanCommand(text: string, chatId?: string | number, token?: string, sendDirectReply: boolean = true, messageId?: number) {
+async function processIncomingScanCommand(text: string, chatId?: string | number, token?: string, sendDirectReply: boolean = true) {
   const parsed = parseScanCommand(text);
   if (!parsed) return { success: false, error: "Invalid scan command format. Use 'scan:TRACKING_NO|PHONE_NO'" };
 
   const { tracking, phone, dayStr } = parsed;
-
-  // Deduplication Check 1: Message ID Check
-  if (chatId && messageId && isDuplicateMessage(chatId, messageId)) {
-    console.log(`[Deduplication] Ignored duplicate message_id ${messageId} for tracking: ${tracking}`);
-    return { success: true, message: "រំលងការស្កែនស្ទួន (Message already processed)", duplicate: true };
-  }
-
-  // Deduplication Check 2: Tracking Code Check (within 30s)
-  if (isDuplicateTracking(tracking)) {
-    console.log(`[Deduplication] Ignored duplicate scan within 30s for tracking: ${tracking}`);
-    return { success: true, message: "រំលងការស្កែនស្ទួន (Tracking scanned recently)", duplicate: true };
-  }
-
   const stock = getServerStockData();
 
   // Calculate target day: explicit day from message OR current Phnom Penh day of month
@@ -588,20 +519,8 @@ async function processIncomingScanCommand(text: string, chatId?: string | number
 /**
  * Handle Telegram Photo Message: Download Photo -> Scan Barcode / QR -> Reply & Save
  */
-async function processTelegramPhotoMessage(fileId: string, chatId: string | number, token: string, messageId?: number) {
+async function processTelegramPhotoMessage(fileId: string, chatId: string | number, token: string) {
   try {
-    // Deduplication Check 1: Message ID
-    if (chatId && messageId && isDuplicateMessage(chatId, messageId)) {
-      console.log(`[Deduplication] Ignored duplicate photo message_id ${messageId}`);
-      return;
-    }
-
-    // Deduplication Check 2: Photo File ID
-    if (isDuplicateFileId(fileId)) {
-      console.log(`[Deduplication] Ignored duplicate photo file_id ${fileId}`);
-      return;
-    }
-
     // 1. Get file path from Telegram API
     const fileInfoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
     const fileInfo = await fileInfoRes.json();
@@ -612,7 +531,7 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "❌ មិនអាចទាញយករូបភាពពី Telegram បានទេ។ សូមព្យាយាមផ្ញើរូបភាពម្តងទៀត。"
+          text: "❌ មិនអាចទាញយករូបភាពពី Telegram បានទេ។ សូមព្យាយាមផ្ញើរូបភាពម្តងទៀត។"
         })
       });
       return;
@@ -632,18 +551,12 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
     ]);
 
     if (scannedCode) {
-      // Deduplication Check 3: Scanned Tracking Code
-      if (isDuplicateTracking(scannedCode)) {
-        console.log(`[Deduplication] Tracking ${scannedCode} scanned photo recently. Skipping duplicate reply.`);
-        return;
-      }
-
       // Barcode / QR Code found!
       console.log(`[Telegram Photo Scan Success] Tracking: ${scannedCode}, Receiver Phone: ${receiverPhone || "N/A"}`);
 
       // Save into Stock Database — only លេខបៀល (tracking) and លេខអ្នកទទួល (receiver phone)
       const scanMessage = receiverPhone ? `scan:${scannedCode}|${receiverPhone}` : `scan:${scannedCode}`;
-      await processIncomingScanCommand(scanMessage, chatId, token, false, messageId);
+      await processIncomingScanCommand(scanMessage, chatId, token, false);
 
       // Reply back to Telegram user as requested
       const replyText = `✅ ស្កែនជោគជ័យ!\n----------------------------------\n📦 លេខបៀល (Tracking): ${scannedCode}\n📱 លេខអ្នកទទួល (Receiver): ${receiverPhone || "⚠️ រកមិនឃើញ សូមបំពេញដោយដៃ"}\n----------------------------------\n📦 បានរក្សាទុកក្នុងប្រព័ន្ធ Web App ដោយស្វ័យប្រវត្តិ!\n#JT_PHOTO_SCAN_SUCCESS`;
@@ -679,7 +592,7 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
+          text: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ។"
         })
       });
     } catch (e) { }
@@ -689,17 +602,8 @@ async function processTelegramPhotoMessage(fileId: string, chatId: string | numb
 /**
  * Handle Telegram Document Message: Download JSON File -> Parse -> Save Cache & Update Stock State
  */
-async function processTelegramDocumentMessage(doc: any, chatId: string | number, token: string, messageId?: number) {
+async function processTelegramDocumentMessage(doc: any, chatId: string | number, token: string) {
   try {
-    if (chatId && messageId && isDuplicateMessage(chatId, messageId)) {
-      console.log(`[Deduplication] Ignored duplicate doc message_id ${messageId}`);
-      return;
-    }
-    if (isDuplicateFileId(doc.file_id)) {
-      console.log(`[Deduplication] Ignored duplicate doc file_id ${doc.file_id}`);
-      return;
-    }
-
     const fileName = doc.file_name || "";
     const isJson = fileName.toLowerCase().endsWith(".json") || doc.mime_type === "application/json" || fileName.includes("stock") || fileName.includes("backup");
     if (!isJson) return;
@@ -765,13 +669,8 @@ async function pollTelegramUpdates() {
         const msg = update.message || update.channel_post;
         if (!msg) continue;
 
-        const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
-        const messageId = msg.message_id;
-
-        // Skip if message_id was already processed recently
-        if (isDuplicateMessage(chatId, messageId)) continue;
-
         const text = msg.text || msg.caption || "";
+        const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
 
         // Check message content: document, photo, or scan command text
         if (msg.document) {
@@ -824,7 +723,34 @@ app.post("/api/stock", (req, res) => {
   });
 });
 
-// API: Execute or simulate Telegram scan command directly via API
+// Standalone Direct Scan API Endpoint (No Telegram Bot dependency)
+app.post("/api/scan", async (req, res) => {
+  try {
+    let { tracking, phone, day, message, text } = req.body;
+    let scanCmd = "";
+
+    if (tracking) {
+      scanCmd = `scan:${tracking.trim()}${phone ? `|${phone.trim()}` : ""}${day ? `|${day}` : ""}`;
+    } else {
+      const rawText = message || text || "";
+      if (!rawText) {
+        return res.status(400).json({ success: false, error: "សូមបញ្ចូលលេខបៀល (Tracking Number) ឬសារស្កែន" });
+      }
+      scanCmd = /^scan:/i.test(rawText.trim()) ? rawText.trim() : `scan:${rawText.trim()}`;
+    }
+
+    // Process scan command internally WITHOUT invoking Telegram Bot API
+    const result = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || "បរាជ័យក្នុងការដំណើរការស្កែន" });
+  }
+});
+
+// Legacy Telegram Scan Endpoint (redirects to direct scan logic)
 app.post("/api/telegram/scan", async (req, res) => {
   try {
     const text = req.body.message || req.body.text || "";
@@ -835,7 +761,8 @@ app.post("/api/telegram/scan", async (req, res) => {
       return res.status(400).json({ success: false, error: "សូមវាយបញ្ចូលសារស្កែន (e.g. scan:TRACKING|PHONE)" });
     }
 
-    const result = await processIncomingScanCommand(text, chatId, token);
+    const sendReply = Boolean(token && chatId);
+    const result = await processIncomingScanCommand(text, chatId, token, sendReply);
     if (!result.success) {
       return res.status(400).json(result);
     }
@@ -845,12 +772,12 @@ app.post("/api/telegram/scan", async (req, res) => {
   }
 });
 
-// API: Scan image buffer / Base64 image via POST request
-app.post("/api/telegram/scan-image", async (req, res) => {
+// API: Direct & Standalone Image Scan (Base64 image)
+app.post("/api/scan-image", async (req, res) => {
   try {
-    const { imageBase64, webhookApiUrl } = req.body;
+    const { imageBase64, day } = req.body;
     if (!imageBase64) {
-      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。" });
+      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញរូបភាពទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ" });
     }
 
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
@@ -862,7 +789,48 @@ app.post("/api/telegram/scan-image", async (req, res) => {
     ]);
 
     if (scannedText) {
-      // Call API POST request to database / Web App if webhook defined
+      const scanCmd = `scan:${scannedText}${receiverPhone ? `|${receiverPhone}` : ""}${day ? `|${day}` : ""}`;
+      const processResult = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
+
+      return res.json({
+        success: true,
+        scannedData: scannedText,
+        receiverPhone: receiverPhone || null,
+        targetDay: processResult.targetDay,
+        rowIndex: processResult.rowIndex,
+        message: `✅ ស្កែនជោគជ័យ! លេខបៀល៖ ${scannedText}${receiverPhone ? ` | លេខអ្នកទទួល៖ ${receiverPhone}` : ""}`
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "❌ រកមិនឃើញ Barcode/QR ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ"
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: `❌ កំហុសក្នុងការស្កែនរូបភាព៖ ${err.message}`
+    });
+  }
+});
+
+// Backward-compatible endpoint for /api/telegram/scan-image
+app.post("/api/telegram/scan-image", async (req, res) => {
+  try {
+    const { imageBase64, webhookApiUrl, day } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញ QR/Barcode ទេ" });
+    }
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    const imageBuffer = Buffer.from(cleanBase64, "base64");
+
+    const [scannedText, receiverPhone] = await Promise.all([
+      scanBarcodeFromBuffer(imageBuffer),
+      extractReceiverPhoneFromImage(imageBuffer),
+    ]);
+
+    if (scannedText) {
       if (webhookApiUrl) {
         try {
           await fetch(webhookApiUrl, {
@@ -875,61 +843,53 @@ app.post("/api/telegram/scan-image", async (req, res) => {
         }
       }
 
-      // Also insert into internal stock database — លេខបៀល (tracking) + លេខអ្នកទទួល (receiver phone)
-      await processIncomingScanCommand(receiverPhone ? `scan:${scannedText}|${receiverPhone}` : `scan:${scannedText}`);
+      const scanCmd = `scan:${scannedText}${receiverPhone ? `|${receiverPhone}` : ""}${day ? `|${day}` : ""}`;
+      const processResult = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
 
       return res.json({
         success: true,
         scannedData: scannedText,
         receiverPhone: receiverPhone || null,
+        targetDay: processResult.targetDay,
+        rowIndex: processResult.rowIndex,
         message: `✅ ស្កែនជោគជ័យ! លេខបៀល៖ ${scannedText}${receiverPhone ? ` | លេខអ្នកទទួល៖ ${receiverPhone}` : ""}`
       });
     } else {
       return res.status(400).json({
         success: false,
-        message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
+        message: "❌ រកមិនឃើញ QR/Barcode ទេ"
       });
     }
   } catch (err: any) {
     return res.status(500).json({
       success: false,
-      message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
+      message: `❌ កំហុសក្នុងការស្កែន៖ ${err.message}`
     });
   }
 });
 
 // API: Telegram Webhook (In case webhook is set up on Telegram)
-app.post("/api/telegram/webhook", (req, res) => {
-  // 1. Acknowledge fast to Telegram API (prevents Telegram timeout & duplicate retries)
-  res.json({ ok: true });
-
-  // 2. Process update asynchronously in background with deduplication
-  setImmediate(async () => {
-    try {
-      const update = req.body;
-      const msg = update?.message || update?.channel_post;
-      if (!msg) return;
-
-      const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
-      const messageId = msg.message_id;
-
-      // Skip if message_id was already processed recently
-      if (isDuplicateMessage(chatId, messageId)) return;
-
+app.post("/api/telegram/webhook", async (req, res) => {
+  try {
+    const update = req.body;
+    const msg = update?.message || update?.channel_post;
+    if (msg) {
       const text = msg.text || msg.caption || "";
+      const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
 
       if (msg.document) {
-        await processTelegramDocumentMessage(msg.document, chatId, DEFAULT_BOT_TOKEN, messageId);
+        await processTelegramDocumentMessage(msg.document, chatId, DEFAULT_BOT_TOKEN);
       } else if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
         const largestPhoto = msg.photo[msg.photo.length - 1];
-        await processTelegramPhotoMessage(largestPhoto.file_id, chatId, DEFAULT_BOT_TOKEN, messageId);
+        await processTelegramPhotoMessage(largestPhoto.file_id, chatId, DEFAULT_BOT_TOKEN);
       } else if (text && /^scan:/i.test(text.trim())) {
-        await processIncomingScanCommand(text, chatId, DEFAULT_BOT_TOKEN, true, messageId);
+        await processIncomingScanCommand(text, chatId, DEFAULT_BOT_TOKEN);
       }
-    } catch (err: any) {
-      console.error("[Telegram Webhook background error]", err?.message || err);
     }
-  });
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.json({ ok: false, error: err.message });
+  }
 });
 
 // API: Test Telegram Bot Connection
