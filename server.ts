@@ -723,34 +723,7 @@ app.post("/api/stock", (req, res) => {
   });
 });
 
-// Standalone Direct Scan API Endpoint (No Telegram Bot dependency)
-app.post("/api/scan", async (req, res) => {
-  try {
-    let { tracking, phone, day, message, text } = req.body;
-    let scanCmd = "";
-
-    if (tracking) {
-      scanCmd = `scan:${tracking.trim()}${phone ? `|${phone.trim()}` : ""}${day ? `|${day}` : ""}`;
-    } else {
-      const rawText = message || text || "";
-      if (!rawText) {
-        return res.status(400).json({ success: false, error: "សូមបញ្ចូលលេខបៀល (Tracking Number) ឬសារស្កែន" });
-      }
-      scanCmd = /^scan:/i.test(rawText.trim()) ? rawText.trim() : `scan:${rawText.trim()}`;
-    }
-
-    // Process scan command internally WITHOUT invoking Telegram Bot API
-    const result = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
-    return res.json(result);
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || "បរាជ័យក្នុងការដំណើរការស្កែន" });
-  }
-});
-
-// Legacy Telegram Scan Endpoint (redirects to direct scan logic)
+// API: Execute or simulate Telegram scan command directly via API
 app.post("/api/telegram/scan", async (req, res) => {
   try {
     const text = req.body.message || req.body.text || "";
@@ -761,8 +734,7 @@ app.post("/api/telegram/scan", async (req, res) => {
       return res.status(400).json({ success: false, error: "សូមវាយបញ្ចូលសារស្កែន (e.g. scan:TRACKING|PHONE)" });
     }
 
-    const sendReply = Boolean(token && chatId);
-    const result = await processIncomingScanCommand(text, chatId, token, sendReply);
+    const result = await processIncomingScanCommand(text, chatId, token);
     if (!result.success) {
       return res.status(400).json(result);
     }
@@ -772,54 +744,12 @@ app.post("/api/telegram/scan", async (req, res) => {
   }
 });
 
-// API: Direct & Standalone Image Scan (Base64 image)
-app.post("/api/scan-image", async (req, res) => {
-  try {
-    const { imageBase64, day } = req.body;
-    if (!imageBase64) {
-      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញរូបភាពទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ" });
-    }
-
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-    const imageBuffer = Buffer.from(cleanBase64, "base64");
-
-    const [scannedText, receiverPhone] = await Promise.all([
-      scanBarcodeFromBuffer(imageBuffer),
-      extractReceiverPhoneFromImage(imageBuffer),
-    ]);
-
-    if (scannedText) {
-      const scanCmd = `scan:${scannedText}${receiverPhone ? `|${receiverPhone}` : ""}${day ? `|${day}` : ""}`;
-      const processResult = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
-
-      return res.json({
-        success: true,
-        scannedData: scannedText,
-        receiverPhone: receiverPhone || null,
-        targetDay: processResult.targetDay,
-        rowIndex: processResult.rowIndex,
-        message: `✅ ស្កែនជោគជ័យ! លេខបៀល៖ ${scannedText}${receiverPhone ? ` | លេខអ្នកទទួល៖ ${receiverPhone}` : ""}`
-      });
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: "❌ រកមិនឃើញ Barcode/QR ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ"
-      });
-    }
-  } catch (err: any) {
-    return res.status(500).json({
-      success: false,
-      message: `❌ កំហុសក្នុងការស្កែនរូបភាព៖ ${err.message}`
-    });
-  }
-});
-
-// Backward-compatible endpoint for /api/telegram/scan-image
+// API: Scan image buffer / Base64 image via POST request
 app.post("/api/telegram/scan-image", async (req, res) => {
   try {
-    const { imageBase64, webhookApiUrl, day } = req.body;
+    const { imageBase64, webhookApiUrl } = req.body;
     if (!imageBase64) {
-      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញ QR/Barcode ទេ" });
+      return res.status(400).json({ success: false, message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。" });
     }
 
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
@@ -831,6 +761,7 @@ app.post("/api/telegram/scan-image", async (req, res) => {
     ]);
 
     if (scannedText) {
+      // Call API POST request to database / Web App if webhook defined
       if (webhookApiUrl) {
         try {
           await fetch(webhookApiUrl, {
@@ -843,27 +774,25 @@ app.post("/api/telegram/scan-image", async (req, res) => {
         }
       }
 
-      const scanCmd = `scan:${scannedText}${receiverPhone ? `|${receiverPhone}` : ""}${day ? `|${day}` : ""}`;
-      const processResult = await processIncomingScanCommand(scanCmd, undefined, undefined, false);
+      // Also insert into internal stock database — លេខបៀល (tracking) + លេខអ្នកទទួល (receiver phone)
+      await processIncomingScanCommand(receiverPhone ? `scan:${scannedText}|${receiverPhone}` : `scan:${scannedText}`);
 
       return res.json({
         success: true,
         scannedData: scannedText,
         receiverPhone: receiverPhone || null,
-        targetDay: processResult.targetDay,
-        rowIndex: processResult.rowIndex,
         message: `✅ ស្កែនជោគជ័យ! លេខបៀល៖ ${scannedText}${receiverPhone ? ` | លេខអ្នកទទួល៖ ${receiverPhone}` : ""}`
       });
     } else {
       return res.status(400).json({
         success: false,
-        message: "❌ រកមិនឃើញ QR/Barcode ទេ"
+        message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
       });
     }
   } catch (err: any) {
     return res.status(500).json({
       success: false,
-      message: `❌ កំហុសក្នុងការស្កែន៖ ${err.message}`
+      message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
     });
   }
 });
