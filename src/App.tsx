@@ -17,30 +17,13 @@ import {
   RotateCcw,
   Download,
   Calendar,
-  Send,
-  CloudDownload,
-  CloudUpload,
-  Settings,
-  Bot,
-  Loader2,
   AlertCircle,
-  RefreshCw,
-  ShieldCheck,
-  FileUp,
-  Camera,
-  CheckCircle2,
-  XCircle,
-  Image as ImageIcon
+  FileUp
 } from "lucide-react";
 
 const DAY_COUNT = 31;
 const DEFAULT_ROWS = 31;
 const STORAGE_KEY = "jt-daily-report-v1";
-const TELEGRAM_TOKEN_KEY = "jt-telegram-token";
-const TELEGRAM_CHAT_KEY = "jt-telegram-chatid";
-
-const DEFAULT_BOT_TOKEN = "";
-const DEFAULT_CHAT_ID = "@my_stock_db_2026";
 
 const COLUMNS = [
   { key: "ret", label: "ត្រឡប់", type: "number", widthClass: "w-[55px] min-w-[55px]" },
@@ -394,44 +377,6 @@ export default function DailyReportApp() {
     return mergeWithDefaults(SEED_DATA as MonthData);
   });
 
-  // Telegram States
-  const [botToken, setBotToken] = useState<string>(() => {
-    return localStorage.getItem(TELEGRAM_TOKEN_KEY) || DEFAULT_BOT_TOKEN;
-  });
-  const [chatId, setChatId] = useState<string>(() => {
-    return localStorage.getItem(TELEGRAM_CHAT_KEY) || DEFAULT_CHAT_ID;
-  });
-
-  const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
-  const [isSavingToTelegram, setIsSavingToTelegram] = useState(false);
-  const [isSyncingFromTelegram, setIsSyncingFromTelegram] = useState(false);
-  const [isTestingBot, setIsTestingBot] = useState(false);
-  const [saveNote, setSaveNote] = useState("");
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
-
-  // Telegram Scan Command States
-  const [scanInput, setScanInput] = useState("scan:5677714|0966997172");
-  const [isExecutingScan, setIsExecutingScan] = useState(false);
-  const lastServerUpdateRef = useRef<number>(0);
-  const lastScannedVersionRef = useRef<number>(0);
-
-  // List of all scanned tracking items fetched from /api/scanned-items
-  const [scannedItems, setScannedItems] = useState<Array<{
-    day: number;
-    rowIndex: number;
-    tracking: string;
-    receiverPhone: string;
-    senderPhone: string;
-    today: string;
-    prevday: string;
-    ret: string;
-    reloc: string;
-    sent: string;
-    cod: string;
-    cc: string;
-    issue: string;
-  }>>([]);
-
   const [toastMessage, setToastMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
   const [activeDay, setActiveDay] = useState(() => {
@@ -458,72 +403,19 @@ export default function DailyReportApp() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ stockData: updatedData })
-    })
-      .then((res) => res.json())
-      .then((res) => {
-        if (res.lastUpdated) {
-          lastServerUpdateRef.current = res.lastUpdated;
-        }
-      })
-      .catch(() => {});
+    }).catch(() => {});
   }, []);
 
-  // Sync state with server and poll for Telegram Bot Scan command updates
+  // Sync state with server on mount
   useEffect(() => {
-    // Initial sync from server
     fetch("/api/stock")
       .then((res) => res.json())
       .then((result) => {
         if (result.success && result.stockData) {
-          if (result.lastUpdated > 0) {
-            setData(mergeWithDefaults(result.stockData));
-            lastServerUpdateRef.current = result.lastUpdated;
-          } else {
-            syncDataToServer(data);
-          }
+          setData(mergeWithDefaults(result.stockData));
         }
       })
       .catch(() => {});
-
-    // Polling server every 2.5s to automatically reflect Telegram Bot scan updates
-    const interval = setInterval(() => {
-      fetch("/api/stock")
-        .then((res) => res.json())
-        .then((result) => {
-          if (result.success && result.lastUpdated && result.lastUpdated > lastServerUpdateRef.current) {
-            lastServerUpdateRef.current = result.lastUpdated;
-            const merged = mergeWithDefaults(result.stockData);
-            setData(merged);
-            showToast("⚡ ទទួលបានទិន្នន័យស្កែនថ្មីពី Telegram Bot! (New row scanned via Telegram Bot)", "success");
-          }
-        })
-        .catch(() => {});
-    }, 2500);
-
-    return () => clearInterval(interval);
-  }, [showToast, syncDataToServer]);
-
-  // Dedicated polling loop for /api/scanned-items every 2s
-  // Runs independently from the /api/stock poll above so Telegram scan updates
-  // appear immediately in the scannedItems list without triggering a full data merge.
-  useEffect(() => {
-    const fetchScannedItems = () => {
-      fetch("/api/scanned-items")
-        .then((res) => res.json())
-        .then((result) => {
-          if (result.success && typeof result.version === "number" && result.version > lastScannedVersionRef.current) {
-            lastScannedVersionRef.current = result.version;
-            setScannedItems(result.items || []);
-          }
-        })
-        .catch(() => {});
-    };
-
-    // Fetch immediately on mount
-    fetchScannedItems();
-
-    const scannedInterval = setInterval(fetchScannedItems, 2000);
-    return () => clearInterval(scannedInterval);
   }, []);
 
   // Auto-save data to LocalStorage and push to server
@@ -535,132 +427,6 @@ export default function DailyReportApp() {
     }
     syncDataToServer(data);
   }, [data, syncDataToServer]);
-
-  // Persist Telegram Bot Token & Chat ID
-  useEffect(() => {
-    localStorage.setItem(TELEGRAM_TOKEN_KEY, botToken);
-    localStorage.setItem(TELEGRAM_CHAT_KEY, chatId);
-  }, [botToken, chatId]);
-
-  // Execute or test Scan Command (e.g. scan:TRACKING_NO|PHONE_NO)
-  const handleExecuteScanCommand = async () => {
-    if (!scanInput.trim()) {
-      showToast("សូមវាយបញ្ចូលសារស្កែន! (e.g. scan:TRACKING_NO|PHONE_NO)", "error");
-      return;
-    }
-    setIsExecutingScan(true);
-    try {
-      const res = await fetch("/api/telegram/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: scanInput,
-          botToken,
-          chatId
-        })
-      });
-      const result = await res.json();
-      if (result.success) {
-        showToast(result.message || "ស្កែនបានជោគជ័យ!", "success");
-        if (result.targetDay) {
-          setActiveDay(parseInt(result.targetDay));
-        }
-        if (result.rowIndex !== undefined) {
-          setHighlightedRow(result.rowIndex);
-        }
-        setScanInput("");
-      } else {
-        showToast(`ស្កែនបរាជ័យ: ${result.error}`, "error");
-      }
-    } catch (err: any) {
-      showToast(`កំហុសបណ្តាញ: ${err.message}`, "error");
-    } finally {
-      setIsExecutingScan(false);
-    }
-  };
-
-  // Save Stock Data to Telegram Bot API
-  const handleSaveToTelegram = async () => {
-    setIsSavingToTelegram(true);
-    try {
-      const res = await fetch("/api/telegram/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          botToken,
-          chatId,
-          stockData: data,
-          note: saveNote,
-        }),
-      });
-
-      const result = await res.json();
-      if (result.success) {
-        showToast(`បានផ្ញើ និងរក្សាទុកទិន្នន័យស្តុកទៅកាន់ Telegram (${chatId}) រួចរាល់!`, "success");
-        setLastSyncTime(result.timestamp || new Date().toLocaleString());
-        setSaveNote("");
-      } else {
-        showToast(`បរាជ័យក្នុងការរក្សាទុកទៅ Telegram: ${result.error}`, "error");
-      }
-    } catch (err: any) {
-      showToast(`កំហុសបណ្តាញ: ${err.message}`, "error");
-    } finally {
-      setIsSavingToTelegram(false);
-    }
-  };
-
-  // Sync / Restore Stock Data from Telegram Bot API
-  const handleSyncFromTelegram = async () => {
-    setIsSyncingFromTelegram(true);
-    try {
-      const res = await fetch("/api/telegram/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          botToken,
-          chatId,
-        }),
-      });
-
-      const result = await res.json();
-      if (result.success && result.stockData) {
-        const merged = mergeWithDefaults(result.stockData);
-        setData(merged);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        setLastSyncTime(result.dateSaved || new Date().toLocaleString());
-        showToast(`បានទាញយកទិន្នន័យស្តុកចុងក្រោយពី Telegram (${result.dateSaved}) ដោយជោគជ័យ!`, "success");
-      } else {
-        showToast(`មិនអាចទាញយកទិន្នន័យពី Telegram ទេ: ${result.error}`, "error");
-      }
-    } catch (err: any) {
-      showToast(`កំហុសបណ្តាញ: ${err.message}`, "error");
-    } finally {
-      setIsSyncingFromTelegram(false);
-    }
-  };
-
-  // Test Telegram Bot Connection
-  const handleTestBot = async () => {
-    setIsTestingBot(true);
-    try {
-      const res = await fetch("/api/telegram/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botToken, chatId }),
-      });
-      const result = await res.json();
-      if (result.success) {
-        const botName = result.bot?.first_name || result.bot?.username || "Bot";
-        showToast(`ភ្ជាប់បានជោគជ័យ! Bot: @${result.bot?.username || botName}`, "success");
-      } else {
-        showToast(`ការតភ្ជាប់បរាជ័យ: ${result.error}`, "error");
-      }
-    } catch (err: any) {
-      showToast(`កំហុសបណ្តាញ: ${err.message}`, "error");
-    } finally {
-      setIsTestingBot(false);
-    }
-  };
 
   // Current day data helper
   const currentDayData = useMemo(() => data[activeDay] || emptyDay(), [data, activeDay]);
@@ -727,7 +493,7 @@ export default function DailyReportApp() {
         if (parseVal(r.reloc)) relocCount += parseVal(r.reloc);
       });
 
-      const dayRemaining = (arrived - todayCount - relocCount) + (startLeftover - prevdayCount);
+      const dayRemaining = (arrived - todayCount - relocCount) + (startLeftover - prevdayCount - retCount);
       remainings[d] = dayRemaining;
       prevDayLeft = dayRemaining;
     }
@@ -760,7 +526,7 @@ export default function DailyReportApp() {
 
     const totalOut = todayCount + prevdayCount + retCount + relocCount + sentCount;
     const pendingDistribution = arrived - todayCount - relocCount;
-    const todayLeftover = prevLeftover - prevdayCount;
+    const todayLeftover = prevLeftover - prevdayCount - retCount;
     const remaining = pendingDistribution + todayLeftover;
     const dividend = (todayCount * 900) + (prevdayCount * 800) + (sentCount * 1000);
 
@@ -1138,7 +904,7 @@ export default function DailyReportApp() {
 ផ្ញើចេញ (Sent): ${activeDayStats.sentCount}
 ----------------------------------
 ចាំចែកចាយ: ${activeDayStats.pendingDistribution}
-សល់ថ្ងៃនេះ: ${activeDayStats.todayLeftover}
+សល់ថ្ងៃមុន: ${activeDayStats.todayLeftover}
 សរុបប្រគល់ចេញ: ${activeDayStats.totalOut}
 សល់សរុប: ${activeDayStats.remaining}
 ----------------------------------
@@ -1178,72 +944,19 @@ export default function DailyReportApp() {
     if (e.target) e.target.value = "";
   };
 
-  // --- Camera-based Barcode/QR Scan (directly from the phone/browser) ---
-  // Reuses the exact same /api/telegram/scan-image endpoint that the
-  // Telegram Bot and JTreport Mobile (APK) use, so results are 100% consistent.
-  const cameraFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isCameraScanModalOpen, setIsCameraScanModalOpen] = useState(false);
-  const [cameraScanStatus, setCameraScanStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
-  const [cameraScanPreview, setCameraScanPreview] = useState<string | null>(null);
-  const [cameraScanResult, setCameraScanResult] = useState<{ tracking: string; phone: string | null } | null>(null);
-  const [cameraScanError, setCameraScanError] = useState<string | null>(null);
-
-  const resetCameraScan = () => {
-    setCameraScanStatus("idle");
-    setCameraScanPreview(null);
-    setCameraScanResult(null);
-    setCameraScanError(null);
-  };
-
-  const openCameraScanModal = () => {
-    resetCameraScan();
-    setIsCameraScanModalOpen(true);
-  };
-
-  const handleCameraFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (e.target) e.target.value = ""; // allow re-selecting the same file next time
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const dataUrl = evt.target?.result as string;
-      setCameraScanPreview(dataUrl);
-      setCameraScanStatus("sending");
-      setCameraScanError(null);
-      setCameraScanResult(null);
-
-      try {
-        const res = await fetch("/api/telegram/scan-image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64: dataUrl }),
-        });
-        const result = await res.json();
-        if (result.success) {
-          setCameraScanStatus("success");
-          setCameraScanResult({ tracking: result.scannedData || "", phone: result.receiverPhone || null });
-          showToast(result.message || "ស្កែនជោគជ័យ!", "success");
-          // Pull the fresh row in immediately instead of waiting for the next poll.
-          fetch("/api/stock")
-            .then((r) => r.json())
-            .then((r) => {
-              if (r.success && r.stockData) {
-                setData(mergeWithDefaults(r.stockData));
-                if (r.lastUpdated) lastServerUpdateRef.current = r.lastUpdated;
-              }
-            })
-            .catch(() => {});
-        } else {
-          setCameraScanStatus("error");
-          setCameraScanError(result.message || "រកមិនឃើញ Barcode/QR ទេ");
-        }
-      } catch (err: any) {
-        setCameraScanStatus("error");
-        setCameraScanError(`កំហុសបណ្តាញ: ${err.message}`);
-      }
-    };
-    reader.readAsDataURL(file);
+  const handleExportJSON = () => {
+    try {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `JT_Daily_Report_${new Date().toISOString().slice(0, 10)}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      showToast("បាននាំចេញទិន្នន័យជា JSON ដោយជោគជ័យ!", "success");
+    } catch (err: any) {
+      showToast(`កំហុសក្នុងការនាំចេញ JSON: ${err.message}`, "error");
+    }
   };
 
 
@@ -1350,11 +1063,9 @@ export default function DailyReportApp() {
             }`}
           >
             {toastMessage.type === "success" ? (
-              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-            ) : toastMessage.type === "error" ? (
-              <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+              <Check className="w-5 h-5 text-emerald-600 shrink-0" />
             ) : (
-              <Bot className="w-5 h-5 text-blue-600 shrink-0" />
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
             )}
             <span>{toastMessage.text}</span>
             <button onClick={() => setToastMessage(null)} className="ml-auto text-slate-400 hover:text-slate-700">
@@ -1384,37 +1095,6 @@ export default function DailyReportApp() {
 
           {/* Action Tools Header Bar */}
           <div className="flex items-center space-x-1.5 sm:space-x-2 flex-wrap gap-y-2">
-            {/* Save to Telegram Quick Button */}
-            <button
-              onClick={handleSaveToTelegram}
-              disabled={isSavingToTelegram}
-              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
-              title="រក្សាទុកទិន្នន័យស្តុកទៅ Telegram"
-            >
-              {isSavingToTelegram ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudUpload className="w-4 h-4" />}
-              <span>{isSavingToTelegram ? "Save..." : "រក្សាទុក (Save)"}</span>
-            </button>
-
-
-
-            {/* Camera Scan — works on phone browsers, same backend as APK/Telegram */}
-            <input
-              ref={cameraFileInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={handleCameraFileSelected}
-            />
-            <button
-              onClick={openCameraScanModal}
-              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
-              title="ស្កែនតាមកាមេរ៉ា (Camera Scan)"
-            >
-              <Camera className="w-4 h-4" />
-              <span className="hidden xs:inline">ស្កែនកាមេរ៉ា</span>
-            </button>
-
             {/* Import JSON */}
             <input
               ref={jsonFileInputRef}
@@ -1432,24 +1112,14 @@ export default function DailyReportApp() {
               <span>នាំចូល JSON</span>
             </button>
 
-            {/* Sync from Telegram Quick Button */}
+            {/* Export JSON */}
             <button
-              onClick={handleSyncFromTelegram}
-              disabled={isSyncingFromTelegram}
-              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
-              title="ទាញយកទិន្នន័យស្តុកពី Telegram"
+              onClick={handleExportJSON}
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
+              title="ទាញយកទិន្នន័យជា JSON"
             >
-              {isSyncingFromTelegram ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
-              <span>{isSyncingFromTelegram ? "Sync..." : "ទាញយក (Sync)"}</span>
-            </button>
-
-            {/* Telegram Bot Settings Modal Toggle */}
-            <button
-              onClick={() => setIsTelegramModalOpen(true)}
-              className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-xl transition"
-            >
-              <Bot className="w-4 h-4 text-sky-600" />
-              <span className="hidden md:inline">Telegram Bot</span>
+              <Download className="w-4 h-4" />
+              <span>នាំចេញ JSON</span>
             </button>
 
             {/* Search */}
@@ -1487,9 +1157,9 @@ export default function DailyReportApp() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 w-full max-w-none p-2 sm:p-4 lg:p-6 space-y-2">
+      <main className="flex-1 w-full max-w-none px-2 sm:px-4 lg:px-6 pt-1 sm:pt-1.5 pb-2 sm:pb-4 space-y-1.5">
         {/* Days Navigation Bar */}
-        <div className="bg-white px-2 py-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1 w-full" style={{ marginTop: "0px", marginBottom: "2px" }}>
+        <div className="bg-white px-2 py-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1 w-full">
           <button
             onClick={() => setActiveDay((d) => Math.max(1, d - 1))}
             disabled={activeDay === 1}
@@ -1806,7 +1476,7 @@ export default function DailyReportApp() {
                   <span className="font-black text-sky-700 text-xs sm:text-sm">{activeDayStats.pendingDistribution}</span>
                 </div>
                 <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-300 shadow-sm">
-                  <span className="text-amber-800 block mb-0.5 font-bold">សល់ថ្ងៃនេះ</span>
+                  <span className="text-amber-800 block mb-0.5 font-bold">សល់ថ្ងៃមុន</span>
                   <span className="font-black text-amber-700 text-xs sm:text-sm">{activeDayStats.todayLeftover}</span>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
@@ -2349,141 +2019,6 @@ export default function DailyReportApp() {
         </div>
       )}
 
-      {/* Telegram Bot Config & Sync Settings Modal */}
-      {isTelegramModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
-              <div className="flex items-center space-x-2.5">
-                <Bot className="w-5 h-5 text-sky-600" />
-                <h3 className="text-base font-bold text-slate-900">ការកំណត់ Telegram Bot Database</h3>
-              </div>
-              <button onClick={() => setIsTelegramModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 sm:p-5 space-y-4 text-xs sm:text-sm overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300">
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-700 font-semibold block">Telegram Bot Token:</label>
-                <input
-                  type="text"
-                  value={botToken}
-                  onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono text-xs focus:outline-none focus:border-sky-500 focus:bg-white"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-700 font-semibold block">Chat ID / Channel Handle:</label>
-                <input
-                  type="text"
-                  value={chatId}
-                  onChange={(e) => setChatId(e.target.value)}
-                  placeholder="@my_stock_db_2026"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono text-xs focus:outline-none focus:border-sky-500 focus:bg-white"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs text-slate-700 font-semibold block">កំណត់ចំណាំពេល រក្សាទុក (Optional Note):</label>
-                <input
-                  type="text"
-                  value={saveNote}
-                  onChange={(e) => setSaveNote(e.target.value)}
-                  placeholder="ឧទាហរណ៍: បញ្ចប់ការងារចុងខែ..."
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 text-xs focus:outline-none focus:border-sky-500 focus:bg-white"
-                />
-              </div>
-
-              {/* Actions Grid */}
-              <div className="grid grid-cols-3 gap-2 pt-2">
-                <button
-                  onClick={handleTestBot}
-                  disabled={isTestingBot}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-semibold rounded-xl border border-slate-300 text-xs flex items-center justify-center space-x-1"
-                >
-                  {isTestingBot ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />}
-                  <span>តេស្តភ្ជាប់</span>
-                </button>
-
-                <button
-                  onClick={handleSaveToTelegram}
-                  disabled={isSavingToTelegram}
-                  className="px-3 py-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm"
-                >
-                  {isSavingToTelegram ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CloudUpload className="w-3.5 h-3.5" />}
-                  <span>Save ទៅ Telegram</span>
-                </button>
-
-                <button
-                  onClick={handleSyncFromTelegram}
-                  disabled={isSyncingFromTelegram}
-                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm"
-                >
-                  {isSyncingFromTelegram ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CloudDownload className="w-3.5 h-3.5" />}
-                  <span>Sync ពី Telegram</span>
-                </button>
-              </div>
-
-              {/* Telegram Bot Command Handler Section */}
-              <div className="bg-emerald-50/80 p-3.5 rounded-xl border border-emerald-200 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-xs font-bold text-emerald-800">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Telegram Scan Command Handler</span>
-                  </div>
-                  <span className="text-[10px] text-amber-800 font-mono bg-white px-2 py-0.5 rounded border border-amber-200 font-bold">
-                    scan:TRACKING|PHONE
-                  </span>
-                </div>
-
-                <p className="text-xs text-slate-700 leading-relaxed">
-                  អ្នកអាចផ្ញើសារតាម Telegram ទៅកាន់ Bot ជាមួយនឹងទម្រង់ <code className="text-amber-800 bg-white px-1.5 py-0.5 rounded font-mono font-bold border border-amber-200">scan:TRACKING_NO|PHONE_NO</code> (ឧទាហរណ៍៖ <span className="font-mono text-cyan-800 font-bold">scan:5677714|0966997172</span>)។ Bot នឹងបន្ថែមទិន្នន័យនេះទៅក្នុង Web App ដោយស្វ័យប្រវត្តិ!
-                </p>
-
-                <div className="flex items-center space-x-2 pt-1">
-                  <input
-                    type="text"
-                    value={scanInput}
-                    onChange={(e) => setScanInput(e.target.value)}
-                    placeholder="scan:5677714|0966997172"
-                    className="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    onClick={handleExecuteScanCommand}
-                    disabled={isExecutingScan}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs flex items-center space-x-1 shrink-0 shadow-sm"
-                  >
-                    {isExecutingScan ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                    <span>តេស្តស្កែន (Scan)</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
-                <p className="font-bold text-slate-800">💡 របៀបដំណើការ Telegram Database ៖</p>
-                <ul className="list-disc pl-4 space-y-1 text-slate-600">
-                  <li>ផ្ញើសារទម្រង់ <strong className="text-amber-800 font-mono">scan:TRACKING_NO|PHONE_NO</strong> ទៅកាន់ Bot សម្រាប់ការស្កែនបញ្ចូលភ្លាមៗ។</li>
-                  <li>ចុច <strong>Save ទៅ Telegram</strong> ដើម្បីផ្ញើរបាយការណ៍សង្ខេប និងឯកសារ JSON ទៅកាន់ Channel/Chat {chatId}។</li>
-                  <li>ចុច <strong>Sync ពី Telegram</strong> ដើម្បីទាញយកទិន្នន័យស្តុកចុងក្រោយគេមកលើប្រព័ន្ធវិញភ្លាមៗ។</li>
-                </ul>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
-              <button
-                onClick={() => setIsTelegramModalOpen(false)}
-                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-xl text-xs"
-              >
-                បិទ (Close)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Clear Data Confirmation Modal */}
       {isClearModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2550,109 +2085,6 @@ export default function DailyReportApp() {
               >
                 បោះបង់ (Cancel)
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Mobile-only Floating Scan Button — thumb-friendly quick access on phones */}
-      <button
-        onClick={openCameraScanModal}
-        className="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/30 flex items-center justify-center active:scale-95 transition"
-        title="ស្កែនតាមកាមេរ៉ា"
-      >
-        <Camera className="w-6 h-6" />
-      </button>
-
-      {/* Camera Scan Modal */}
-      {isCameraScanModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
-              <div className="flex items-center space-x-2.5">
-                <Camera className="w-5 h-5 text-emerald-600" />
-                <h3 className="text-base font-bold text-slate-900">ស្កែនតាមកាមេរ៉ា (Camera Scan)</h3>
-              </div>
-              <button
-                onClick={() => setIsCameraScanModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 sm:p-5 space-y-4 text-xs sm:text-sm overflow-y-auto flex-1">
-              {cameraScanStatus === "idle" && (
-                <div className="flex flex-col items-center text-center py-6 space-y-4">
-                  <div className="w-24 h-24 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-                    <Camera className="w-10 h-10 text-slate-400" />
-                  </div>
-                  <p className="text-slate-500 leading-relaxed">
-                    ថតរូប Waybill Label ដើម្បីស្កែន Barcode/QR និងលេខទូរស័ព្ទ
-                    <br />
-                    <span className="text-[11px]">ប្រព័ន្ធស្កែនដូចគ្នានឹង Telegram Bot / App</span>
-                  </p>
-                  <div className="flex gap-2 w-full">
-                    <button
-                      onClick={() => cameraFileInputRef.current?.click()}
-                      className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
-                    >
-                      <Camera className="w-4 h-4" />
-                      <span>ថតរូប Label</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {cameraScanStatus === "sending" && (
-                <div className="flex flex-col items-center text-center py-6 space-y-4">
-                  {cameraScanPreview && (
-                    <img src={cameraScanPreview} alt="preview" className="w-full max-h-48 object-cover rounded-xl border border-slate-200" />
-                  )}
-                  <div className="flex items-center space-x-2 text-slate-600">
-                    <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-                    <span>កំពុងស្កែន...</span>
-                  </div>
-                </div>
-              )}
-
-              {cameraScanStatus === "success" && cameraScanResult && (
-                <div className="flex flex-col items-center text-center py-4 space-y-4">
-                  <CheckCircle2 className="w-14 h-14 text-emerald-600" />
-                  <div className="w-full bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 space-y-2 text-left">
-                    <div>
-                      <div className="text-[10px] text-slate-500 font-semibold">លេខបៀល (Tracking)</div>
-                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.tracking || "-"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-slate-500 font-semibold">លេខអ្នកទទួល</div>
-                      <div className="font-mono font-bold text-slate-900 text-sm">{cameraScanResult.phone || "មិនរកឃើញ"}</div>
-                    </div>
-                  </div>
-                  <p className="text-emerald-700 font-semibold">✅ បានបញ្ចូលទៅ Web App ដោយស្វ័យប្រវត្តិ</p>
-                  <button
-                    onClick={resetCameraScan}
-                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs sm:text-sm shadow-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    <span>ស្កែនបន្ត</span>
-                  </button>
-                </div>
-              )}
-
-              {cameraScanStatus === "error" && (
-                <div className="flex flex-col items-center text-center py-4 space-y-4">
-                  <XCircle className="w-14 h-14 text-red-600" />
-                  <p className="text-red-700">{cameraScanError || "មានបញ្ហា"}</p>
-                  <button
-                    onClick={resetCameraScan}
-                    className="w-full flex items-center justify-center space-x-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-semibold rounded-xl text-xs sm:text-sm"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>សាកល្បងម្តងទៀត</span>
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         </div>
