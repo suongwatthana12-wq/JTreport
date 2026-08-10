@@ -1094,22 +1094,22 @@ export default function DailyReportApp() {
       )}
 
       {/* Top Header Navbar */}
-      <header className="bg-white border-b border-slate-200 px-2.5 sm:px-6 lg:px-8 py-3 sticky top-0 z-20 shadow-sm w-full">
-        <div className="w-full max-w-none flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start sm:items-center gap-3 min-w-0">
-            <div className="min-w-0">
-              <h1 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight flex flex-wrap items-center gap-2">
+      <header className="bg-white border-b border-slate-200 px-3 sm:px-6 lg:px-8 py-3 sticky top-0 z-20 shadow-sm w-full">
+        <div className="w-full max-w-none flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div>
+              <h1 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 Delivery Report
-                <span className="text-[10px] sm:text-xs font-semibold px-2 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded-full">
+                <span className="text-[10px] sm:text-xs font-semibold px-2 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded-full hidden xs:inline-block">
                   Branch Tracking
                 </span>
               </h1>
-              <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">របាយការណ៍ប្រចាំថ្ងៃសាខា - គ្រប់គ្រងការប្រគល់ទំនិញ & COD</p>
+              <p className="text-[11px] sm:text-xs text-slate-500">របាយការណ៍ប្រចាំថ្ងៃសាខា - គ្រប់គ្រងការប្រគល់ទំនិញ & COD</p>
             </div>
           </div>
 
           {/* Action Tools Header Bar */}
-          <div className="flex flex-wrap items-stretch gap-2 sm:justify-end">
+          <div className="flex items-center space-x-1.5 sm:space-x-2 flex-wrap gap-y-2">
             {/* Import JSON */}
             <input
               ref={jsonFileInputRef}
@@ -1120,7 +1120,7 @@ export default function DailyReportApp() {
             />
             <button
               onClick={() => jsonFileInputRef.current?.click()}
-              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm w-full sm:w-auto"
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
               title="បញ្ចូលឯកសារ JSON"
             >
               <FileUp className="w-4 h-4" />
@@ -1145,7 +1145,7 @@ export default function DailyReportApp() {
             />
             <button
               onClick={() => importExcelInputRef.current?.click()}
-              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm w-full sm:w-auto"
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
               title="បញ្ចូលឯកសារ Excel"
             >
               <FileUp className="w-4 h-4" />
@@ -1155,7 +1155,7 @@ export default function DailyReportApp() {
             {/* Export JSON */}
             <button
               onClick={handleExportJSON}
-              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm w-full sm:w-auto"
+              className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold rounded-xl transition shadow-sm"
               title="ទាញយកទិន្នន័យជា JSON"
             >
               <Download className="w-4 h-4" />
@@ -1165,10 +1165,10 @@ export default function DailyReportApp() {
             {/* Search */}
             <button
               onClick={() => setIsSearchOpen(true)}
-              className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-xl transition w-full sm:w-auto"
+              className="flex items-center space-x-2 px-2.5 sm:px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 text-xs sm:text-sm font-medium rounded-xl transition"
             >
               <Search className="w-4 h-4 text-red-600" />
-              <span className="whitespace-nowrap">ស្វែងរកបៀល / ទូរស័ព្ទ</span>
+              <span className="hidden sm:inline">ស្វែងរកបៀល / ទូរស័ព្ទ</span>
             </button>
 
             {/* Monthly Overview Toggle */}
@@ -1181,14 +1181,14 @@ export default function DailyReportApp() {
               }`}
             >
               <BarChart2 className="w-4 h-4" />
-              <span className="whitespace-nowrap">{showOverview ? "មើលតារាងថ្ងៃ" : "សរុបប្រចាំខែ"}</span>
+              <span>{showOverview ? "មើលតារាងថ្ងៃ" : "សរុបប្រចាំខែ"}</span>
             </button>
 
             {/* Clear Data / Reset */}
             <button
               onClick={() => setIsClearModalOpen(true)}
               title="សម្អាត / កំណត់ទិន្នន័យឡើងវិញ (Clear Data)"
-              className="p-2.5 bg-slate-100 hover:bg-red-50 border border-slate-200 hover:border-red-200 text-slate-600 hover:text-red-600 rounded-xl transition flex items-center justify-center"
+              className="p-2 bg-slate-100 hover:bg-red-50 border border-slate-200 hover:border-red-200 text-slate-600 hover:text-red-600 rounded-xl transition flex items-center space-x-1"
             >
               <RotateCcw className="w-4 h-4 text-red-500" />
             </button>
@@ -1197,44 +1197,42 @@ export default function DailyReportApp() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 w-full max-w-none px-2.5 sm:px-4 lg:px-6 pt-2 sm:pt-2 pb-3 sm:pb-4 space-y-2 sm:space-y-2.5">
+      <main className="flex-1 w-full max-w-none px-2 sm:px-4 lg:px-6 pt-1 sm:pt-1.5 pb-2 sm:pb-4 space-y-1.5">
         {/* Days Navigation Bar */}
-        <div className="bg-white px-2 py-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1 w-full overflow-hidden">
+        <div className="bg-white px-2 py-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-1 w-full">
           <button
             onClick={() => setActiveDay((d) => Math.max(1, d - 1))}
             disabled={activeDay === 1}
-            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
             title="ថ្ងៃមុន (Previous Day)"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex-1 min-w-0 overflow-x-auto scrollbar-thin scrollbar-thumb-slate-300">
-            <div className="flex gap-1 min-w-max md:grid md:grid-cols-[repeat(31,minmax(0,1fr))] md:min-w-0">
-              {Array.from({ length: DAY_COUNT }, (_, i) => i + 1).map((day) => (
-                <button
-                  key={day}
-                  onClick={() => {
-                    setActiveDay(day);
-                    setShowOverview(false);
-                  }}
-                  title={`ថ្ងៃទី ${day}`}
-                  className={`py-1.5 px-2 md:px-0 text-[10px] sm:text-xs font-bold rounded-md transition text-center min-w-[2.1rem] md:min-w-0 md:w-full shrink-0 ${
-                    activeDay === day && !showOverview
-                      ? "bg-red-600 text-white shadow-sm font-black"
-                      : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80"
-                  }`}
-                >
-                  {day}
-                </button>
-              ))}
-            </div>
+          <div className="flex-1 grid grid-cols-[repeat(31,minmax(0,1fr))] gap-0.5 items-center justify-items-stretch">
+            {Array.from({ length: DAY_COUNT }, (_, i) => i + 1).map((day) => (
+              <button
+                key={day}
+                onClick={() => {
+                  setActiveDay(day);
+                  setShowOverview(false);
+                }}
+                title={`ថ្ងៃទី ${day}`}
+                className={`py-1 px-0 text-[10px] sm:text-xs font-bold rounded-md transition text-center w-full truncate ${
+                  activeDay === day && !showOverview
+                    ? "bg-red-600 text-white shadow-sm font-black"
+                    : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80"
+                }`}
+              >
+                {day}
+              </button>
+            ))}
           </div>
 
           <button
             onClick={() => setActiveDay((d) => Math.min(DAY_COUNT, d + 1))}
             disabled={activeDay === DAY_COUNT}
-            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
+            className="p-1 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 disabled:opacity-30 text-slate-700 transition shrink-0"
             title="ថ្ងៃបន្ទាប់ (Next Day)"
           >
             <ChevronRight className="w-3.5 h-3.5" />
@@ -1447,9 +1445,9 @@ export default function DailyReportApp() {
         ) : (
           <>
             {/* Active Day Header Dashboard */}
-            <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 space-y-3 sm:space-y-4 shadow-sm" style={{ marginBottom: "4px", marginTop: "0px", paddingBottom: "6px", paddingTop: "7px" }}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-3" style={{ paddingBottom: "6px", paddingTop: "0px", marginBottom: "3px" }}>
-                <div className="flex items-center gap-3">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-4 shadow-sm" style={{ marginBottom: "4px", marginTop: "0px", paddingBottom: "6px", paddingTop: "7px" }}>
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-3" style={{ paddingBottom: "6px", paddingTop: "0px", marginBottom: "3px" }}>
+                <div className="flex items-center space-x-3">
                   <div className="flex items-center justify-center bg-red-50 border border-red-200 text-red-600 font-bold px-3 py-1.5 rounded-xl text-sm gap-1.5">
                     <Calendar className="w-4 h-4" />
                     <span>ថ្ងៃទី {activeDay}</span>
@@ -1457,33 +1455,33 @@ export default function DailyReportApp() {
                   <h2 className="text-base sm:text-lg font-bold text-slate-900">របាយការណ៍ប្រចាំថ្ងៃ</h2>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-                  <div className="flex items-center justify-between sm:justify-start gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 min-w-0">
-                    <label className="text-xs text-slate-600 font-medium whitespace-nowrap">ទំនិញមកដល់:</label>
+                <div className="flex items-center space-x-4 flex-wrap gap-y-2">
+                  <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                    <label className="text-xs text-slate-600 font-medium">ទំនិញមកដល់:</label>
                     <input
                       type="number"
                       value={currentDayData.arrived || ""}
                       onChange={(e) => handleHeaderChange(activeDay, "arrived", e.target.value)}
                       placeholder="0"
-                      className="w-16 sm:w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-blue-600 focus:outline-none focus:border-red-500"
+                      className="w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-blue-600 focus:outline-none focus:border-red-500"
                     />
                   </div>
 
                   {activeDay === 1 ? (
-                    <div className="flex items-center justify-between sm:justify-start gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 min-w-0">
-                      <label className="text-xs text-slate-600 font-medium whitespace-nowrap">នៅសល់ខែចាស់:</label>
+                    <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                      <label className="text-xs text-slate-600 font-medium">នៅសល់ខែចាស់:</label>
                       <input
                         type="number"
                         value={currentDayData.prevMonthLeftover || ""}
                         onChange={(e) => handleHeaderChange(activeDay, "prevMonthLeftover", e.target.value)}
                         placeholder="0"
-                        className="w-16 sm:w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-amber-600 focus:outline-none focus:border-red-500"
+                        className="w-20 px-2 py-0.5 bg-white border border-slate-300 rounded-lg text-sm text-center font-bold text-amber-600 focus:outline-none focus:border-red-500"
                       />
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between sm:justify-start gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 min-w-0">
-                      <label className="text-xs text-slate-600 font-medium whitespace-nowrap">សល់ម្សិលមិញ:</label>
-                      <span className="w-16 sm:w-20 px-2 py-0.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-center font-bold text-violet-700 select-none">
+                    <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                      <label className="text-xs text-slate-600 font-medium">សល់ម្សិលមិញ:</label>
+                      <span className="w-20 px-2 py-0.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-center font-bold text-violet-700 select-none">
                         {allDayRemainings[activeDay - 1] ?? 0}
                       </span>
                     </div>
@@ -1492,7 +1490,7 @@ export default function DailyReportApp() {
               </div>
 
               {/* Metric Quick Summary Badges */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-11 gap-2 text-center text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-11 gap-2 text-center text-xs">
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 shadow-sm">
                   <span className="text-slate-500 font-medium block mb-0.5">ត្រឡប់</span>
                   <span className="font-bold text-red-600 text-base">{activeDayStats.retCount}</span>
