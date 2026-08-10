@@ -23,106 +23,9 @@ process.on("uncaughtException", (err: any) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// SECURITY: no hardcoded fallback token — always set TELEGRAM_BOT_TOKEN as an environment
-// variable (locally in .env, or in your host's dashboard e.g. Render). Never commit a real
-// token into source code or .env.example — anyone with the token can control your bot.
-const DEFAULT_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-if (!DEFAULT_BOT_TOKEN) {
-  console.error("⚠️  TELEGRAM_BOT_TOKEN is not set! Set it in your .env file (local) or host's environment variables (production). The Telegram bot will not work until this is set.");
-}
-const DEFAULT_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@my_stock_db_2026";
-
-/**
- * Normalize and validate Telegram Chat ID / Channel Username according to Telegram API standard:
- * - Public Channel Username: "@my_stock_db_2026"
- * - Private Channel/Group Numeric ID: "-100123456789"
- * - If user enters "my_stock_db_2026", automatically prepends "@" -> "@my_stock_db_2026"
- */
-function normalizeChatId(rawChatId?: string | number): string {
-  if (!rawChatId) return DEFAULT_CHAT_ID;
-  const str = String(rawChatId).trim();
-  if (!str) return DEFAULT_CHAT_ID;
-  if (str.startsWith("@") || str.startsWith("-")) return str;
-  if (/^\d+$/.test(str)) {
-    return str.length >= 10 ? `-${str}` : str;
-  }
-  return `@${str}`;
-}
-
-/**
- * Friendly Error Handler for Telegram API calls with clear Khmer explanations
- */
-function formatTelegramError(resData: any, actionName: string, targetChatId?: string): string {
-  const desc = resData?.description || "Unknown Telegram Error";
-  const code = resData?.error_code;
-  const chatId = targetChatId ? normalizeChatId(targetChatId) : DEFAULT_CHAT_ID;
-
-  if (code === 403 || desc.includes("bot is not a member") || desc.includes("not an admin") || desc.includes("Forbidden")) {
-    return `Bot @Mystock_12_bot មិនទាន់មានសិទ្ធិជា Admin ក្នុង Channel ${chatId} ទេ។\n• សូមចូលទៅកាន់ Channel ${chatId} -> Channel Settings -> Administrators -> បន្ថែម @Mystock_12_bot ជា Admin (ត្រូវមានសិទ្ធិ Post Messages)។`;
-  }
-  if (code === 400 && desc.includes("chat not found")) {
-    return `រកមិនឃើញ Channel/Chat (${chatId}) ទេ។\n• សូមប្រាកដថា Channel នេះជា Public Channel ហើយមាន Username ត្រឹមត្រូវ (ឧទាហរណ៍៖ @my_stock_db_2026)។`;
-  }
-  if (code === 401 || desc.includes("Unauthorized")) {
-    return `Bot Token មិនត្រឹមត្រូវ (Unauthorized) ទេ។\n• សូមពិនិត្យមើល Bot Token របស់ @Mystock_12_bot ឡើងវិញក្នុង Telegram BotFather។`;
-  }
-  return `${actionName} បរាជ័យ៖ ${desc} (Error Code ${code || 400})`;
-}
-
 // Server-side In-Memory Shared State
 let serverStockData: Record<string, any> | null = null;
 let serverLastUpdated: number = Date.now();
-let lastTelegramUpdateId: number = 0;
-let lastTelegramScanTime: number = 0;
-let lastTelegramScanId: string = "";
-
-// Disk-persisted Telegram save cache — survives server restarts.
-// Stores the file_id of the last successfully saved stock document and the last Telegram update_id
-const TELEGRAM_CACHE_FILE = path.join(process.cwd(), ".telegram_cache.json");
-
-interface TelegramCache {
-  fileId: string;
-  messageDate: number;
-  fileName: string;
-  savedAt: number;
-  lastUpdateId?: number;
-}
-
-let telegramCache: TelegramCache | null = null;
-
-function loadTelegramCache() {
-  try {
-    if (fs.existsSync(TELEGRAM_CACHE_FILE)) {
-      const raw = fs.readFileSync(TELEGRAM_CACHE_FILE, "utf-8");
-      telegramCache = JSON.parse(raw);
-      if (telegramCache?.lastUpdateId) {
-        lastTelegramUpdateId = telegramCache.lastUpdateId;
-      }
-      console.log(`[Telegram Cache] Loaded file_id: ${telegramCache?.fileId}, lastUpdateId: ${lastTelegramUpdateId}`);
-    }
-  } catch (e: any) {
-    console.warn(`[Telegram Cache] Could not load cache: ${e.message}`);
-    telegramCache = null;
-  }
-}
-
-function saveTelegramCache(cache: Partial<TelegramCache>) {
-  try {
-    telegramCache = {
-      fileId: cache.fileId !== undefined ? cache.fileId : (telegramCache?.fileId || ""),
-      messageDate: cache.messageDate !== undefined ? cache.messageDate : (telegramCache?.messageDate || Math.floor(Date.now() / 1000)),
-      fileName: cache.fileName !== undefined ? cache.fileName : (telegramCache?.fileName || ""),
-      savedAt: cache.savedAt !== undefined ? cache.savedAt : (telegramCache?.savedAt || Date.now()),
-      lastUpdateId: cache.lastUpdateId !== undefined ? cache.lastUpdateId : (telegramCache?.lastUpdateId || lastTelegramUpdateId),
-    };
-    fs.writeFileSync(TELEGRAM_CACHE_FILE, JSON.stringify(telegramCache, null, 2), "utf-8");
-  } catch (e: any) {
-    console.warn(`[Telegram Cache] Could not write cache: ${e.message}`);
-  }
-}
-
-// Load cache immediately on startup
-loadTelegramCache();
 
 function emptyRow() {
   return {
@@ -414,47 +317,20 @@ async function extractReceiverPhoneFromImage(buffer: Buffer): Promise<string | n
   }
 }
 
-// Parse Telegram message formatted like 'scan:TRACKING_NO|PHONE_NO' or 'scan:TRACKING_NO|PHONE_NO|DAY'.
-// Forgiving of manual typing: accepts '|', ',', or plain whitespace as the separator between
-// tracking / phone / day, since people typing this by hand often forget the exact '|' character.
-function parseScanCommand(text: string) {
-  if (!text) return null;
-  const trimmed = text.trim();
-  const scanMatch = trimmed.match(/^scan:\s*(.+)$/i);
-  if (!scanMatch) return null;
-  const rest = scanMatch[1].trim();
-  if (!rest) return null;
-
-  const parts = rest.split(/[|,]+|\s+/).map((p) => p.trim()).filter(Boolean);
-  const tracking = parts[0] || "";
-  if (!tracking) return null;
-  const phone = parts[1] || "";
-  const dayStr = parts[2] && /^\d+$/.test(parts[2]) ? parts[2] : "";
-  return { tracking, phone, dayStr };
-}
-
-// Process scan command and update shared state
-async function processIncomingScanCommand(text: string, chatId?: string | number, token?: string, sendDirectReply: boolean = true) {
-  const parsed = parseScanCommand(text);
-  if (!parsed) return { success: false, error: "Invalid scan command format. Use 'scan:TRACKING_NO|PHONE_NO'" };
-
-  const { tracking, phone, dayStr } = parsed;
+// Helper function to insert scanned parcel info into stock database directly
+function addScannedParcelToStock(tracking: string, phone: string = "") {
+  if (!tracking) return;
   const stock = getServerStockData();
 
-  // Calculate target day: explicit day from message OR current Phnom Penh day of month
   let targetDay = "1";
-  if (dayStr && parseInt(dayStr) >= 1 && parseInt(dayStr) <= 31) {
-    targetDay = String(parseInt(dayStr));
-  } else {
-    try {
-      const phnomPenhDay = new Intl.DateTimeFormat("en-US", {
-        timeZone: "Asia/Phnom_Penh",
-        day: "numeric"
-      }).format(new Date());
-      targetDay = String(parseInt(phnomPenhDay, 10) || 1);
-    } catch (e) {
-      targetDay = String(new Date().getDate() || 1);
-    }
+  try {
+    const phnomPenhDay = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Phnom_Penh",
+      day: "numeric"
+    }).format(new Date());
+    targetDay = String(parseInt(phnomPenhDay, 10) || 1);
+  } catch (e) {
+    targetDay = String(new Date().getDate() || 1);
   }
 
   if (!stock[targetDay]) {
@@ -466,248 +342,29 @@ async function processIncomingScanCommand(text: string, chatId?: string | number
     dayData.rows = Array.from({ length: 31 }, emptyRow);
   }
 
-  // Find first empty row or append new row
   let targetRowIndex = dayData.rows.findIndex((r: any) => !r.tracking && !r.receiverPhone);
   if (targetRowIndex === -1) {
     dayData.rows.push(emptyRow());
     targetRowIndex = dayData.rows.length - 1;
   }
 
-  // Populate row with scanned parcel data
   dayData.rows[targetRowIndex] = {
     ...dayData.rows[targetRowIndex],
     tracking,
     receiverPhone: phone,
-    today: "1" // Default mark as today's delivered/scanned item
+    today: "1"
   };
 
   serverStockData = stock;
   serverLastUpdated = Date.now();
-  lastTelegramScanTime = serverLastUpdated;
-  lastTelegramScanId = `scan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-  console.log(`[Telegram Bot Scan] Updated day ${targetDay}, row ${targetRowIndex + 1}: tracking=${tracking}, phone=${phone}`);
-
-  // Send confirmation reply to Telegram chat if requested and token/chatId exist
-  if (sendDirectReply && token && chatId) {
-    try {
-      const replyText = `✅ បានស្កែន និងបន្ថែមទំនិញជោគជ័យ!\n----------------------------------\n📦 លេខបៀល (Tracking): ${tracking}\n📱 លេខទូរស័ព្ទ (Phone): ${phone || "N/A"}\n📅 បញ្ចូលក្នុងថ្ងៃទី (Day): ${targetDay}\n🚚 ស្ថានភាព: ថ្ងៃនេះ (Today = 1)\n----------------------------------\n#JT_SCAN_SUCCESS`;
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: replyText
-        })
-      });
-    } catch (err) {
-      console.error("Failed to send Telegram scan reply:", err);
-    }
-  }
-
-  return {
-    success: true,
-    message: `បានស្កែនបន្ថែមទំនិញ ${tracking} ទៅក្នុងថ្ងៃទី ${targetDay} រួចរាល់!`,
-    tracking,
-    phone,
-    targetDay,
-    rowIndex: targetRowIndex,
-    lastUpdated: serverLastUpdated
-  };
 }
-
-/**
- * Handle Telegram Photo Message: Download Photo -> Scan Barcode / QR -> Reply & Save
- */
-async function processTelegramPhotoMessage(fileId: string, chatId: string | number, token: string) {
-  try {
-    // 1. Get file path from Telegram API
-    const fileInfoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
-    const fileInfo = await fileInfoRes.json();
-
-    if (!fileInfo.ok || !fileInfo.result?.file_path) {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: "❌ មិនអាចទាញយករូបភាពពី Telegram បានទេ។ សូមព្យាយាមផ្ញើរូបភាពម្តងទៀត។"
-        })
-      });
-      return;
-    }
-
-    const filePath = fileInfo.result.file_path;
-
-    // 2. Download Image Buffer
-    const imageRes = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
-    const arrayBuffer = await imageRes.arrayBuffer();
-    const imageBuffer = Buffer.from(arrayBuffer);
-
-    // 3. Scan Barcode / QR Code (waybill number) AND OCR the receiver's phone number, in parallel
-    const [scannedCode, receiverPhone] = await Promise.all([
-      scanBarcodeFromBuffer(imageBuffer),
-      extractReceiverPhoneFromImage(imageBuffer),
-    ]);
-
-    if (scannedCode) {
-      // Barcode / QR Code found!
-      console.log(`[Telegram Photo Scan Success] Tracking: ${scannedCode}, Receiver Phone: ${receiverPhone || "N/A"}`);
-
-      // Save into Stock Database — only លេខបៀល (tracking) and លេខអ្នកទទួល (receiver phone)
-      const scanMessage = receiverPhone ? `scan:${scannedCode}|${receiverPhone}` : `scan:${scannedCode}`;
-      await processIncomingScanCommand(scanMessage, chatId, token, false);
-
-      // Reply back to Telegram user as requested
-      const replyText = `✅ ស្កែនជោគជ័យ!\n----------------------------------\n📦 លេខបៀល (Tracking): ${scannedCode}\n📱 លេខអ្នកទទួល (Receiver): ${receiverPhone || "⚠️ រកមិនឃើញ សូមបំពេញដោយដៃ"}\n----------------------------------\n📦 បានរក្សាទុកក្នុងប្រព័ន្ធ Web App ដោយស្វ័យប្រវត្តិ!\n#JT_PHOTO_SCAN_SUCCESS`;
-
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: replyText
-        })
-      });
-    } else {
-      // Failed to scan
-      console.log(`[Telegram Photo Scan Failed] No QR/Barcode detected in image`);
-
-      const failureText = "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ។";
-
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: failureText
-        })
-      });
-    }
-  } catch (err: any) {
-    console.error("Error processing Telegram photo message:", err);
-    try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ។"
-        })
-      });
-    } catch (e) { }
-  }
-}
-
-/**
- * Handle Telegram Document Message: Download JSON File -> Parse -> Save Cache & Update Stock State
- */
-async function processTelegramDocumentMessage(doc: any, chatId: string | number, token: string) {
-  try {
-    const fileName = doc.file_name || "";
-    const isJson = fileName.toLowerCase().endsWith(".json") || doc.mime_type === "application/json" || fileName.includes("stock") || fileName.includes("backup");
-    if (!isJson) return;
-
-    console.log(`[Telegram Document Incoming] Detected JSON file: ${fileName} (file_id: ${doc.file_id})`);
-    const parsedStockData = await fetchStockDocByFileId(token, doc.file_id);
-
-    if (parsedStockData && typeof parsedStockData === "object") {
-      serverStockData = parsedStockData;
-      serverLastUpdated = Date.now();
-      lastTelegramScanTime = serverLastUpdated;
-      lastTelegramScanId = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-      saveTelegramCache({
-        fileId: doc.file_id,
-        messageDate: Math.floor(Date.now() / 1000),
-        fileName: fileName || `jt_stock_backup_${Date.now()}.json`,
-        savedAt: Date.now(),
-      });
-
-      console.log(`[Telegram Document Imported] Successfully imported JSON stock data from ${fileName}`);
-
-      // Send confirmation reply back to Telegram chat
-      try {
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: `✅ ទទួលបាន និងទាញយកទិន្នន័យពីឯកសារ JSON (${fileName}) ចូលក្នុង Web App ដោយជោគជ័យ!\n----------------------------------\n#JT_JSON_IMPORT_SUCCESS`
-          })
-        });
-      } catch (replyErr) { }
-    }
-  } catch (err: any) {
-    console.error("Error processing Telegram document message:", err);
-  }
-}
-
-// Background Telegram Updates Poller to catch incoming 'scan:' messages, photos, and JSON document files in real-time
-async function pollTelegramUpdates() {
-  try {
-    const token = DEFAULT_BOT_TOKEN;
-    if (!token) return;
-
-    const offset = lastTelegramUpdateId > 0 ? lastTelegramUpdateId + 1 : 0;
-    const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&limit=20&allowed_updates=["message","channel_post"]`);
-    const data = await res.json();
-
-    if (!data.ok) {
-      if (data.error_code !== 404 && data.error_code !== 409) {
-        console.error("[Telegram getUpdates failed]", data.error_code, data.description);
-      }
-      return;
-    }
-
-    if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
-      let maxUpdateId = lastTelegramUpdateId;
-      for (const update of data.result) {
-        if (update.update_id > maxUpdateId) {
-          maxUpdateId = update.update_id;
-        }
-        const msg = update.message || update.channel_post;
-        if (!msg) continue;
-
-        const text = msg.text || msg.caption || "";
-        const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
-
-        // Check message content: document, photo, or scan command text
-        if (msg.document) {
-          await processTelegramDocumentMessage(msg.document, chatId, token);
-        } else if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
-          const largestPhoto = msg.photo[msg.photo.length - 1];
-          await processTelegramPhotoMessage(largestPhoto.file_id, chatId, token);
-        } else if (text && /^scan:/i.test(text.trim())) {
-          await processIncomingScanCommand(text, chatId, token);
-        }
-      }
-
-      // Update and persist last Telegram update_id to prevent duplicate processing
-      lastTelegramUpdateId = maxUpdateId;
-      saveTelegramCache({ lastUpdateId: maxUpdateId });
-
-      // Acknowledge updates with Telegram API by setting offset = maxUpdateId + 1
-      try {
-        await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${maxUpdateId + 1}&limit=1`);
-      } catch (ackErr) { }
-    }
-  } catch (err: any) {
-    console.error("[pollTelegramUpdates error]", err?.message || err);
-  }
-}
-
-// Poll Telegram Bot updates every 3 seconds
-setInterval(pollTelegramUpdates, 3000);
 
 // API: Get Shared Stock Data
 app.get("/api/stock", (_req, res) => {
   return res.json({
     success: true,
     stockData: getServerStockData(),
-    lastUpdated: serverLastUpdated,
-    lastTelegramScanId,
-    lastTelegramScanTime
+    lastUpdated: serverLastUpdated
   });
 });
 
@@ -723,29 +380,8 @@ app.post("/api/stock", (req, res) => {
   });
 });
 
-// API: Execute or simulate Telegram scan command directly via API
-app.post("/api/telegram/scan", async (req, res) => {
-  try {
-    const text = req.body.message || req.body.text || "";
-    const token = req.body.botToken || DEFAULT_BOT_TOKEN;
-    const chatId = req.body.chatId || DEFAULT_CHAT_ID;
-
-    if (!text) {
-      return res.status(400).json({ success: false, error: "សូមវាយបញ្ចូលសារស្កែន (e.g. scan:TRACKING|PHONE)" });
-    }
-
-    const result = await processIncomingScanCommand(text, chatId, token);
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
-    return res.json(result);
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || "Failed to process scan command" });
-  }
-});
-
-// API: Scan image buffer / Base64 image via POST request
-app.post("/api/telegram/scan-image", async (req, res) => {
+// API: Scan an image (Barcode/QR + OCR phone) and insert directly into the stock database.
+const handleScanImage = async (req: express.Request, res: express.Response) => {
   try {
     const { imageBase64, webhookApiUrl } = req.body;
     if (!imageBase64) {
@@ -775,7 +411,7 @@ app.post("/api/telegram/scan-image", async (req, res) => {
       }
 
       // Also insert into internal stock database — លេខបៀល (tracking) + លេខអ្នកទទួល (receiver phone)
-      await processIncomingScanCommand(receiverPhone ? `scan:${scannedText}|${receiverPhone}` : `scan:${scannedText}`);
+      addScannedParcelToStock(scannedText, receiverPhone || "");
 
       return res.json({
         success: true,
@@ -795,325 +431,11 @@ app.post("/api/telegram/scan-image", async (req, res) => {
       message: "❌ រកមិនឃើញ QR/Barcode ទេ សូមផ្ញើរូបភាពច្បាស់ជាងនេះ。"
     });
   }
-});
+};
 
-// API: Telegram Webhook (In case webhook is set up on Telegram)
-app.post("/api/telegram/webhook", async (req, res) => {
-  try {
-    const update = req.body;
-    const msg = update?.message || update?.channel_post;
-    if (msg) {
-      const text = msg.text || msg.caption || "";
-      const chatId = msg.chat?.id || DEFAULT_CHAT_ID;
-
-      if (msg.document) {
-        await processTelegramDocumentMessage(msg.document, chatId, DEFAULT_BOT_TOKEN);
-      } else if (msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0) {
-        const largestPhoto = msg.photo[msg.photo.length - 1];
-        await processTelegramPhotoMessage(largestPhoto.file_id, chatId, DEFAULT_BOT_TOKEN);
-      } else if (text && /^scan:/i.test(text.trim())) {
-        await processIncomingScanCommand(text, chatId, DEFAULT_BOT_TOKEN);
-      }
-    }
-    return res.json({ ok: true });
-  } catch (err: any) {
-    return res.json({ ok: false, error: err.message });
-  }
-});
-
-// API: Test Telegram Bot Connection
-app.post("/api/telegram/test", async (req, res) => {
-  try {
-    const token = req.body.botToken || DEFAULT_BOT_TOKEN;
-    const chatId = normalizeChatId(req.body.chatId);
-
-    // Call getMe to verify Bot Token
-    const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-    const meData = await meRes.json();
-
-    if (!meData.ok) {
-      return res.status(400).json({
-        success: false,
-        error: formatTelegramError(meData, "ភ្ជាប់ទៅ Bot", chatId),
-        details: meData
-      });
-    }
-
-    const botUsername = meData.result?.username || "Mystock_12_bot";
-
-    // Call getChat to verify Channel / Group
-    const chatRes = await fetch(`https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(chatId)}`);
-    const chatData = await chatRes.json();
-
-    if (!chatData.ok) {
-      return res.status(400).json({
-        success: false,
-        bot: meData.result,
-        error: formatTelegramError(chatData, "ភ្ជាប់ទៅ Channel", chatId),
-        details: chatData
-      });
-    }
-
-    return res.json({
-      success: true,
-      bot: meData.result,
-      chat: chatData.result,
-      message: `បានភ្ជាប់ទៅ Bot @${botUsername} និង Channel ${chatId} ដោយជោគជ័យ!`
-    });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || "Failed to connect to Telegram" });
-  }
-});
-
-// API: Save Stock Data to Telegram
-app.post("/api/telegram/save", async (req, res) => {
-  try {
-    const token = req.body.botToken || DEFAULT_BOT_TOKEN;
-    const chatId = normalizeChatId(req.body.chatId);
-    const stockData = req.body.stockData;
-    const note = req.body.note || "";
-
-    if (!stockData) {
-      return res.status(400).json({ success: false, error: "មិនមានទិន្នន័យសម្រាប់រក្សាទុក (No stock data provided)" });
-    }
-
-    serverStockData = stockData;
-    serverLastUpdated = Date.now();
-
-    const timestamp = new Date().toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" });
-    const jsonString = JSON.stringify(stockData, null, 2);
-
-    // Calculate summary statistics
-    let totalArrived = 0;
-    let totalToday = 0;
-    let totalCOD = 0;
-    let totalCC = 0;
-    let recordedDaysCount = 0;
-
-    Object.keys(stockData).forEach((d) => {
-      const dayObj = stockData[d];
-      if (!dayObj) return;
-      if (dayObj.arrived) totalArrived += parseFloat(dayObj.arrived) || 0;
-      let hasData = false;
-      (dayObj.rows || []).forEach((r: any) => {
-        if (r.today) totalToday += parseFloat(r.today) || 0;
-        if (r.cod) totalCOD += parseFloat(r.cod) || 0;
-        if (r.cc) totalCC += parseFloat(r.cc) || 0;
-        if (r.tracking || r.receiverPhone) hasData = true;
-      });
-      if (hasData || dayObj.arrived) recordedDaysCount++;
-    });
-
-    const captionText = `📦 [ J&T DAILY STOCK BACKUP DATA ]
-----------------------------------
-📅 កាលបរិច្ឆេទរក្សាទុក: ${timestamp}
-📊 ចំនួនថ្ងៃកត់ត្រា: ${recordedDaysCount} ថ្ងៃ
-📦 ទំនិញមកដល់សរុប: ${totalArrived}
-🚚 ប្រគល់ចេញថ្ងៃនេះសរុប: ${totalToday}
-💵 សរុប COD: ${totalCOD.toLocaleString()} KHR
-💳 សរុប CC Cash: ${totalCC.toLocaleString()} KHR
-${note ? `📝 សំគាល់: ${note}\n` : ""}----------------------------------
-#JT_STOCK_DATA_V1`;
-
-    // 1. Send Text Summary Message
-    const msgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: captionText,
-      }),
-    });
-
-    const msgResult = await msgRes.json();
-
-    if (!msgResult.ok) {
-      return res.status(400).json({
-        success: false,
-        error: formatTelegramError(msgResult, "រក្សាទុកទិន្នន័យទៅ Telegram", chatId),
-        details: msgResult
-      });
-    }
-
-    // 2. Send JSON file as Document using FormData
-    const formData = new FormData();
-    formData.append("chat_id", chatId);
-    formData.append("caption", `📄 ឯកសារទិន្នន័យស្តុក J&T (${timestamp}) #JT_STOCK_FILE`);
-
-    const fileBlob = new Blob([jsonString], { type: "application/json" });
-    formData.append("document", fileBlob, `jt_stock_backup_${Date.now()}.json`);
-
-    const docRes = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-      method: "POST",
-      body: formData,
-    });
-
-    const docResult = await docRes.json();
-
-    // Persist file_id to disk & memory so Sync can retrieve it directly
-    if (docResult.ok && docResult.result?.document?.file_id) {
-      saveTelegramCache({
-        fileId: docResult.result.document.file_id,
-        messageDate: docResult.result.date || Math.floor(Date.now() / 1000),
-        fileName: docResult.result.document.file_name || `jt_stock_backup_${Date.now()}.json`,
-        savedAt: Date.now(),
-      });
-    }
-
-    return res.json({
-      success: true,
-      message: `បានរក្សាទុកទិន្នន័យស្តុកទៅ Telegram Channel (${chatId}) ដោយជោគជ័យ!`,
-      textMessageId: msgResult.result?.message_id,
-      documentMessageId: docResult.ok ? docResult.result?.message_id : null,
-      timestamp,
-    });
-  } catch (err: any) {
-    console.error("Save to Telegram error:", err);
-    return res.status(500).json({ success: false, error: err.message || "Failed to save stock data to Telegram" });
-  }
-});
-
-// Helper: download and parse a JSON document from Telegram by file_id
-async function fetchStockDocByFileId(token: string, fileId: string): Promise<any> {
-  const fileRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
-  const fileData = await fileRes.json();
-  if (!fileData.ok || !fileData.result?.file_path) {
-    throw new Error(`មិនអាចយកទីតាំងឯកសារពី Telegram ទេ: ${fileData.description || "Invalid file_id"}`);
-  }
-  const downloadRes = await fetch(`https://api.telegram.org/file/bot${token}/${fileData.result.file_path}`);
-  const text = await downloadRes.text();
-  return JSON.parse(text);
-}
-
-// API: Sync/Fetch Latest Stock Data from Telegram Bot
-// Multi-pass strategy:
-// 1. Primary: Use disk/memory cached file_id if present
-// 2. Secondary: Search getUpdates for recent JSON documents sent into Telegram
-// 3. Tertiary: Fallback to serverStockData in memory
-app.post("/api/telegram/sync", async (req, res) => {
-  try {
-    const token = req.body.botToken || DEFAULT_BOT_TOKEN;
-    const chatId = normalizeChatId(req.body.chatId);
-
-    // 1. Primary: Use disk/memory cached file_id if present
-    if (telegramCache?.fileId) {
-      try {
-        console.log(`[Telegram Sync] Fetching cached file_id: ${telegramCache.fileId} (${telegramCache.fileName})`);
-        const parsedStockData = await fetchStockDocByFileId(token, telegramCache.fileId);
-
-        serverStockData = parsedStockData;
-        serverLastUpdated = Date.now();
-
-        const savedDateStr = telegramCache.messageDate
-          ? new Date(telegramCache.messageDate * 1000).toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" })
-          : new Date(telegramCache.savedAt).toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" });
-
-        return res.json({
-          success: true,
-          message: "បានទាញយកទិន្នន័យស្តុក (Sync) ពី Telegram ដោយជោគជ័យ!",
-          stockData: parsedStockData,
-          dateSaved: savedDateStr,
-          fileName: telegramCache.fileName,
-          source: "cached_file_id",
-        });
-      } catch (cacheErr: any) {
-        console.warn(`[Telegram Sync] Cached file_id fetch failed (${cacheErr.message}), trying getUpdates scan...`);
-      }
-    }
-
-    // 2. Secondary: Search Telegram getUpdates for recent JSON documents
-    try {
-      const updatesRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=100&allowed_updates=["message","channel_post"]`);
-      const updatesData = await updatesRes.json();
-
-      if (updatesData.ok && Array.isArray(updatesData.result)) {
-        for (let i = updatesData.result.length - 1; i >= 0; i--) {
-          const update = updatesData.result[i];
-          const msg = update.message || update.channel_post;
-          if (!msg) continue;
-
-          if (msg.document) {
-            const fileName = msg.document.file_name || "";
-            const isJson = fileName.toLowerCase().endsWith(".json") ||
-              msg.document.mime_type === "application/json" ||
-              fileName.includes("stock") ||
-              fileName.includes("backup") ||
-              (msg.caption && (msg.caption.includes("#JT_STOCK_FILE") || msg.caption.includes("#JT_STOCK_DATA_V1")));
-
-            if (isJson) {
-              const fileId = msg.document.file_id;
-              console.log(`[Telegram Sync] Found latest JSON document in updates: ${fileName} (${fileId})`);
-              const parsedStockData = await fetchStockDocByFileId(token, fileId);
-
-              if (parsedStockData && typeof parsedStockData === "object") {
-                serverStockData = parsedStockData;
-                serverLastUpdated = Date.now();
-
-                saveTelegramCache({
-                  fileId,
-                  messageDate: msg.date || Math.floor(Date.now() / 1000),
-                  fileName: fileName || "jt_stock_backup.json",
-                  savedAt: Date.now(),
-                });
-
-                const dateStr = msg.date
-                  ? new Date(msg.date * 1000).toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" })
-                  : new Date().toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" });
-
-                return res.json({
-                  success: true,
-                  message: "បានទាញយកទិន្នន័យស្តុក (Sync) ពី Telegram ដោយជោគជ័យ!",
-                  stockData: parsedStockData,
-                  dateSaved: dateStr,
-                  fileName: fileName || "jt_stock_backup.json",
-                  source: "telegram_updates",
-                });
-              }
-            }
-          }
-        }
-      }
-    } catch (updatesErr: any) {
-      console.warn("[Telegram Sync] getUpdates query error:", updatesErr.message);
-    }
-
-    // 3. Tertiary: Fallback to serverStockData in memory
-    if (serverStockData) {
-      return res.json({
-        success: true,
-        message: "បានទាញយកទិន្នន័យស្តុកពី Memory Server ដោយជោគជ័យ!",
-        stockData: serverStockData,
-        dateSaved: new Date(serverLastUpdated).toLocaleString("en-US", { timeZone: "Asia/Phnom_Penh" }),
-        fileName: "server_memory.json",
-        source: "server_memory",
-      });
-    }
-
-    // 4. If all fail, return guided Khmer instructions
-    return res.status(404).json({
-      success: false,
-      error: `រកមិនឃើញឯកសារទិន្នន័យ (#JT_STOCK_FILE) នៅក្នុង Telegram ទេ។\n\nសូមអនុវត្តតាម ៣ ជំហានខាងក្រោម៖\n១. ត្រូវប្រាកដថា Bot @Mystock_12_bot ជា Admin ក្នុង Channel ${chatId}\n២. ចុចប៊ូតុង "រក្សាទុក (Save)" ក្នុង Web App ដើម្បី Backup ទិន្នន័យដំបូងទៅ Channel ${chatId}\n៣. បន្ទាប់មកចុច "ទាញយក (Sync)" ម្ដងទៀត។`,
-    });
-  } catch (err: any) {
-    console.error("Sync from Telegram error:", err);
-    return res.status(500).json({ success: false, error: err.message || "Failed to sync stock data from Telegram" });
-  }
-});
+app.post("/api/scan-image", handleScanImage);
 
 async function startServer() {
-  // If a webhook is registered for this bot (e.g. previously set for the Netlify deployment),
-  // getUpdates() will fail with a silent-looking 409 Conflict and the bot will never respond.
-  // Clear it so long-polling always works, whichever environment this instance runs in.
-  if (DEFAULT_BOT_TOKEN) {
-    try {
-      const delRes = await fetch(`https://api.telegram.org/bot${DEFAULT_BOT_TOKEN}/deleteWebhook?drop_pending_updates=false`);
-      const delData = await delRes.json();
-      console.log("[Telegram] deleteWebhook:", delData.ok ? "ok" : delData.description);
-    } catch (err: any) {
-      console.error("[Telegram] deleteWebhook failed:", err.message);
-    }
-  }
-
   // Vite middleware for dev or production static serving
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

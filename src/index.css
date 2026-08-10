@@ -4,6 +4,19 @@
   --font-sans: 'Kantumruy Pro', 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  touch-action: manipulation;
+  overscroll-behavior-y: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Remove spin buttons ▲▼ from number inputs across all browsers */
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button {
